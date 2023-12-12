@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        "./carla",
+        "./PythonRobotics/PathPlanning"
+    ]
+}
