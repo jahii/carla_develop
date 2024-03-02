@@ -279,6 +279,7 @@ class World(object):
             spawn_points = self.map.get_spawn_points()
             spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            print('Spawn point:',spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
         # Set up the sensors.
@@ -723,9 +724,9 @@ class HUD(object):
             '']
         ########
         a = world.player.get_acceleration()
-        print('Speed   ', v.length())    
-        print('Accelero', a.length())
-        print('')
+        # print('Speed   ', v.length())    
+        # print('Accelero', a.length())
+        # print('')
         # if math.hypot(world.imu_sensor.accelerometer[0],world.imu_sensor.accelerometer[1])>10:
         #     print('Accelero:', math.hypot(world.imu_sensor.accelerometer[0],world.imu_sensor.accelerometer[1]))
         ########
@@ -1283,6 +1284,7 @@ def game_loop(args):
             sim_world.wait_for_tick()
 
         clock = pygame.time.Clock()
+        
         while True:
             if args.sync:
                 sim_world.tick()

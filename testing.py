@@ -140,7 +140,7 @@ def main():
                 debug.draw_point(carla.Location(x=debug_temp_loc.x,y=debug_temp_loc.y,z=debug_temp_loc.z+2),0.1, carla.Color(255,0,0,0),2)
 
         
-        ego_agent = PolynomialAgent(ego_veh, 65)
+        ego_agent = PolynomialAgent(ego_veh, 50)
         hum_agent = BasicAgent(human_veh, 45)
         
         start_wp = world.get_map().get_waypoint(ego_veh.get_location())

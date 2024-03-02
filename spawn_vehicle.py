@@ -1,14 +1,32 @@
-import carla
 import random
-import pygame
-import sys
-import os
-from pygame.locals import KMOD_CTRL
-from pygame.locals import K_ESCAPE
-from pygame.locals import K_q
-import logging
-import math
 from time import sleep
+import numpy as np
+import glob
+import os
+import sys
+import argparse
+import pygame
+import time
+import math
+from polynomial_agent import PolynomialAgent
+import weakref
+
+try:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/carla')
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/PythonRobotics/PathPlanning')
+except IndexError:
+    pass
+try:
+    sys.path.append(glob.glob('./carla/dist/carla-*%d.%d-%s.egg' % (
+        sys.version_info.major,
+        sys.version_info.minor,
+        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
+    print('EGG founded')
+except IndexError:
+    print('EGG not found')
+    pass
+from carla import ColorConverter as cc
+import carla
 
 try:
     # Connect to the client and retrieve the world object
@@ -27,7 +45,11 @@ try:
 
     print(car_model)
 
-    spawn_point = random.choice(world.get_map().get_spawn_points())
+    # spawn_point = random.choice(world.get_map().get_spawn_points())
+
+    # Town12
+    spawn_point = carla.Transform(carla.Location(x=4070, y=4140, z=370)) 
+
     vehicle = world.spawn_actor(car_model, spawn_point)
     print('Spawn point :',spawn_point)
     bound_x = vehicle.bounding_box.location.x

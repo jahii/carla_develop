@@ -1,14 +1,8 @@
-import random
-from time import sleep
-import numpy as np
+
 import glob
 import os
 import sys
-import argparse
-import time
-import math
-import weakref
-from pprint import pprint
+
 
 try:
     import pygame
@@ -31,6 +25,16 @@ try:
         'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
 except IndexError:
     pass
+import carla
+from carla import ColorConverter as cc
+
+import argparse
+import time
+import math
+import weakref
+import random
+from time import sleep
+import numpy as np
 
 from agents.navigation.controller import VehiclePIDController
 from agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
@@ -40,8 +44,7 @@ from QuinticPolynomialsPlanner.quintic_polynomials_planner import QuinticPolynom
 from CubicSpline import cubic_spline_planner
 from agents.tools.misc import *
 from polynomial_agent import PolynomialAgent
-import carla
-from carla import ColorConverter as cc
+
 
 
 class DisplayManager(object):
@@ -107,7 +110,7 @@ def main():
 
 
         # Connect to the client and retrieve the world object
-        client = carla.Client('localhost', 2000)
+        client = carla.Client('localhost', 2000) # 2번 컴 : '143.248.221.198'
         client.set_timeout(10.0)
         world = client.get_world()
         blueprint_library = world.get_blueprint_library()
@@ -122,9 +125,11 @@ def main():
         car_model = random.choice(vehicles)
 
         # Spawning vehicles
-        spawn_point = random.choice(world.get_map().get_spawn_points())
-        
-
+        # spawn_point = random.choice(world.get_map().get_spawn_points())
+        spawn_point = carla.Transform(carla.Location(x=15.2, y=-4.7, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.0, roll=0.000000)) 
+        # Town 4 : carla.Transform(carla.Location(x=15.2, y=-4.7, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.0, roll=0.000000))
+        # Town 6 : carla.Transform(carla.Location(x=183.236069, y=86.662941, z=0.300000), carla.Rotation(pitch=0.000000, yaw=-36.711231, roll=0.000000)) 
+        # Town 12: carla.Transform(carla.Location(x=2230, y=3080, z=370), carla.Rotation(pitch=0.000000, yaw=-36.711231, roll=0.000000))
         Ego_actor = world.spawn_actor(ego_model, spawn_point)
         print('Mercedes Spawn point : ', spawn_point)
         sleep(0.1)
@@ -148,7 +153,7 @@ def main():
                 debug_temp_loc = actor_snapshot.get_transform().location
                 debug.draw_point(carla.Location(x=debug_temp_loc.x,y=debug_temp_loc.y,z=debug_temp_loc.z+2),0.1, carla.Color(1,1,0,0),2)
 
-        benz_agent = PolynomialAgent(Ego_actor, 60)
+        benz_agent = PolynomialAgent(Ego_actor, 50)
         # benz_agent = BasicAgent(benz, 45)
         
         start_wp = world.get_map().get_waypoint(Ego_actor.get_location())

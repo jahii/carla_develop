@@ -10,6 +10,7 @@ import numpy as np
 import copy
 from pprint import pprint
 
+
 try:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/carla')
     sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/PythonRobotics/PathPlanning')
@@ -144,15 +145,13 @@ class FrenetPath:
         self.c = []
 
 
-
-
 class PolynomialAgent(object):
 
     def __init__(self, vehicle, target_speed=50):
         self._vehicle = vehicle
         self._world=vehicle.get_world()
         self._map = self._world.get_map()
-        self._target_speed = target_speed / 3.6 # [m/s]
+        self._target_speed = target_speed / 3.6 # [km/h to m/s]
         
         # Base Parameter
         opt_dict = {}
@@ -168,14 +167,14 @@ class PolynomialAgent(object):
         self._offset = 0
         self._pathminlength = 90.0
         self._pathlength = 100.0 # [m]
-        self._base_range = 3.0
+        self._base_range = 1.0
         self._distance_ratio = 0.5
-        self._waypoints_queue = deque(maxlen=10000)
+        self._path = deque(maxlen=10000)
         self._min_waypoint_queue_length = 100
         self._stop_waypoint_creation = False
         self._debug = self._world.debug
         self._destination = None
-        self._safetygap = 10.0
+        self._safetygap = 2.5
         self._start_emergency = None
         self._ego_wp = None
         self._unitlength = 3.0
@@ -187,14 +186,14 @@ class PolynomialAgent(object):
         self._MAX_T = 3.0
         self._speed_range = 50.0 / 3.6 # [m/s]
         self._longitudinal_no = 4
-        self._max_accel = 15.0 # [m/s^2]
-        self._max_curvature = 5.0 # [1/m]
+        self._max_accel = 10.0 # [m/s^2]
+        self._max_curvature = 3.0 # [1/m]
 
         # Path Cost weights
         self._K_J = 0.1
         self._K_T = 0.1
-        self._K_D1 = 10.0
-        self._K_D2 = 1.0
+        self._K_D1 = 0.1
+        self._K_D2 = 10.0
         self._K_LAT = 1.0
         self._K_LON = 1.0
 
@@ -244,54 +243,74 @@ class PolynomialAgent(object):
         vehicle_speed_mps = vehicle_speed / 3.6
         vehicle_acceleration = get_acceleration(self._vehicle)
         vehicle_acceleration_mps = vehicle_acceleration / 3.6
-        waypoint_distance = self._base_range + vehicle_speed*self._distance_ratio
+
+
         self._ego_wp = self._map.get_waypoint(vehicle_location)
         if not self._ego_wp:
             print('No ego waypoint')
 
-        # waypoint_distance = max(min(self._pathminlength,waypoint_distance),self._pathlength)
+        # ref_distance = max(min(self._pathminlength,waypoint_distance),self._pathlength)
         ref_distance = 100.0
 
-        cur_wps = self.getforwardwaypoints(ref_distance,vehicle_speed_mps)
+        ref_wps = self.getforwardwaypoints(ref_distance,vehicle_speed_mps)
         
         wpx, wpy = [], []
-        for wp in cur_wps:
+        for wp in ref_wps:
             wpx.append(wp.transform.location.x)
             wpy.append(wp.transform.location.y)
 
+
         # Generate Reference Path
         csp = cubic_spline_planner.CubicSpline2D(wpx, wpy)
-
         s = np.arange(0, csp.s[-1], 1)
-
-
-        ################################################## VEHICLE STATUS
-        si_d, si_dd, di, di_d, di_dd = self._get_vehicle_status(csp)
-        
-        if si_dd > self._max_accel:
-            self._max_accel = math.ceil(si_dd)
-
         for i_s in s:
             ix, iy = csp.calc_position(i_s) 
             if self._isdebug:
                 self._debug.draw_point(carla.Location(x=ix,y=iy,z=0.3),0.1,carla.Color(0,0,0),0.05)
                 if i_s !=0:
                     self._debug.draw_line(carla.Location(x=ix,y=iy,z=0.3),carla.Location(x=pix,y=piy,z=0.3),0.1,carla.Color(0,0,0),0.05)
-                pix, piy = ix, iy
+                pix, piy = ix, iy  
+        
+
+        # VEHICLE Current STATUS ####################################################### 
+        si_d, si_dd, di, di_d, di_dd = self._get_vehicle_status(csp)
+
+        if abs(si_dd) > self._max_accel:
+            si_dd = np.clip(si_dd, -self._max_accel,self._max_accel)
+
+        inter1 = time.time()-start
+
         
         print('vehicle speed :',vehicle_speed_mps,'[m/s]')
         print('vehicle acceleration :',vehicle_acceleration_mps,'[m/s^2]')
-        ################################################### path generation
-        ################################################### USING current vehicle status
-        path = self._frenet_optimal_planning(csp, si_d, si_dd, di, di_d, di_dd)
-        if not path:
-            control = carla.VehicleControl()
-            control.throttle = 0.0
-            control.steer = 0.0
-            control.brake = self._max_brake
-            control.hand_brake = False
-            return control
-        ################################################### USING trajectory planning
+        # path generation ##############################################################
+        if self._risk_assessment(self._path) or not self._path:
+            # USING current vehicle status #################################################
+            print(self._path)
+            self._path = deque(maxlen=10000)
+            path_frenet = self._frenet_optimal_planning(csp, si_d, si_dd, di, di_d, di_dd)
+            if not path_frenet:
+                control = carla.VehicleControl()
+                control.throttle = 0.0
+                control.steer = 0.0
+                control.brake = self._max_brake
+                control.hand_brake = False
+                return control
+            for i in range(len(path_frenet.x)):
+                self._path.append([carla.Location(x=path_frenet.x[i],y=path_frenet.y[i],z=0.3),path_frenet.ds[i]/self._dt*3.6])
+        
+        num_remove_wp = 0
+        for i in range(len(self._path)):
+            if self._path[i][0].distance(vehicle_location) < self._base_range+vehicle_speed_mps*self._dt:
+                num_remove_wp+=1
+            else:
+                break
+        print('Number of Removed point:',num_remove_wp)
+        for _ in range(num_remove_wp):
+            self._path.popleft()
+        for num in range(len(self._path)):
+            self._debug.draw_point(self._path[num][0],0.1,carla.Color(0,255,0,100),0.1)
+        # USING trajectory planning ################################################## 
         # path = self._frenet_optimal_planning(csp, self._si_d, self._si_dd, self._di, self._di_d, self._di_dd)
         # self._si_d, self._si_dd, self._di, self._di_d, self._di_dd = path.s_d[1], path.s_dd[1], path.d[1],path.d_d[1],path.d_dd[1]
         inter1 = time.time()-start
@@ -299,19 +318,27 @@ class PolynomialAgent(object):
         ################################################### TEMP
         # next_wp = ego_wp.next(10.0)[0]
         print('s_d',si_d,'s_dd', si_dd,'d', di,'d_d', di_d,'d_dd', di_dd)
-        cur_yaw = path.yaw[0]
-        next_wp = carla.Transform(carla.Location(x=path.x[1],y=path.y[1]), carla.Rotation(yaw = path.yaw[1]*180/math.pi))
 
-        if not any([abs(yaw - cur_yaw) > math.pi/36 for yaw in path.yaw]):
-            next_wp = carla.Transform(carla.Location(x=path.x[-1],y=path.y[-1]), carla.Rotation(yaw = path.yaw[-1]*180/math.pi))
-        else:
-            print('TURNING!!!!!')
-        print("WHERE are u going? s:", path.s[1],'d:',path.d[1])
+        if not self._path:
+            control = carla.VehicleControl()
+            control.throttle = 0.0
+            control.steer = 0.0
+            control.brake = self._max_brake
+            control.hand_brake = False
+            return control
+        
+        next_wp = carla.Transform(self._path[0][0])
+        # cur_yaw = path.yaw[0]
+        # if not any([abs(yaw - cur_yaw) > math.pi/36 for yaw in path.yaw]):
+        #     next_wp = carla.Transform(carla.Location(x=path.x[-1],y=path.y[-1]), carla.Rotation(yaw = path.yaw[-1]*180/math.pi))
+        # else:
+        #     print('TURNING!!!!!')
+        # print("WHERE are u going? s:", path.s[1],'d:',path.d[1])
 
         #################################################### Throttle, Steering Controller
-        next_speed = path.ds[-1]/self._dt*3.6 #[km/h]
-        con_speed = max(next_speed,10.0) #[km/h]
-        print('next speed:',next_speed/3.6 , next_speed)
+        next_speed = self._path[0][1] #[km/h]
+        con_speed = max(next_speed, 10.0) #[km/h]
+        print('next speed:', next_speed / 3.6 , next_speed)
         control = self._vehicle_controller.run_step(next_speed, next_wp)
         if vehicle_acceleration_mps > self._max_accel-2 :
             control.throttle = 0.0
@@ -333,49 +360,11 @@ class PolynomialAgent(object):
         if control.brake > 0.0 :
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(255,0,0,0),life_time=0.1)
             print('Brake', control.brake)
-            print('speeds:', path.ds)
+            # print('speeds:', path.ds)
         else:
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(0,255,0,1),life_time=0.1)
         print(inter1, inter2)
-        ############### Emergency Stop
 
-        """
-        sur_vehicles = self._surrounded_vehicles(self._vehicle)
-
-        collision_checking_T = 2.0
-        # 2초
-        cur_time = time.time()
-        if self._start_emergency is None:
-            if vehicle_speed_mps>0:
-                for sv in sur_vehicles:
-                    for i in range(1,int(collision_checking_T/self._dt)):
-                        t = i*self._dt
-                        pred_ego_location=ego_wp.next(t*vehicle_speed_mps)[0].transform.location
-                        pred_sur_location=sv.get_location()+t*sv.get_velocity()
-                        # print("pred_ego_location:", pred_ego_location,'/ pred_sur_location:',pred_sur_location)
-                        if pred_ego_location.distance(pred_sur_location)<self._safetygap:
-                            self._start_emergency = time.time()
-                            # print("Distance:",pred_ego_location.distance(pred_sur_location), t)
-                            print("\nBRAKE!\n")
-                            # control.throttle = 0.0
-                            # control.brake = self._max_brake
-                            # control.hand_brake = False
-                            control.speed = 0.0
-                            control.steer = 0.0
-
-                            if self._isdebug:
-                                self._debug.draw_point(pred_ego_location,0.1,carla.Color(255,0,0,255),0.1)
-                            break
-
-        elif cur_time - self._start_emergency < 2.5: # still emergency
-            # control.throttle = 0.0
-            # control.brake = self._max_brake
-            # control.hand_brake = False
-            control.speed = 0.0
-            control.steer = 0.0         
-        else:
-            self._start_emergency = None
-        """
         print('',end='\n\n')
         if vehicle_location.distance(self._destination) < 1.0:
             print("ARRIVE!")
@@ -439,9 +428,6 @@ class PolynomialAgent(object):
         # print(len(best_path.x),len(best_path.t))
         if not best_path:
             return None
-
-        for num in range(len(best_path.x)):
-            self._debug.draw_point(carla.Location(x=best_path.x[num],y=best_path.y[num],z=0.4),0.1,carla.Color(0,255,0,100),0.1)
 ###########################
         return best_path
 
@@ -596,9 +582,9 @@ class PolynomialAgent(object):
         SVs = self._surrounded_vehicles()
         for sv in SVs:
             for i in range(len(fp.x)):
-                pred_sur_location=sv.get_location() + i*self._dt*sv.get_velocity() + 0.5*sv.get_acceleration()*(self._dt)**2
-                pred_ego_location=carla.Location(x = fp.x[i], y = fp.y[i])
-                if pred_ego_location.distance(pred_sur_location)<self._safetygap:
+                pred_sur_location = sv.get_location() + i*self._dt*sv.get_velocity() + 0.5*sv.get_acceleration()*(i*self._dt)**2
+                pred_ego_location = carla.Location(x = fp.x[i], y = fp.y[i])
+                if pred_ego_location.distance(pred_sur_location) < self._safetygap:
                     print('Collision detected!!')
                     return False
         return True
@@ -614,7 +600,20 @@ class PolynomialAgent(object):
         vehicles = world.get_actors().filter('vehicle.*')
         for veh in vehicles:
             if veh.id != self._vehicle.id:
-                veh_to_ego = veh_to_ego = veh.get_location().distance(self._vehicle.get_location())
+                veh_to_ego = veh.get_location().distance(self._vehicle.get_location())
                 if veh_to_ego < radius:
                     sur_vehicles.append(veh)
         return sur_vehicles
+    
+    def _risk_assessment(self, ego_path):
+        if ego_path is None:
+            return False
+        SVs = self._surrounded_vehicles()
+        for sv in SVs:
+            for i in range(len(ego_path)):
+                pred_sur_location = sv.get_location() + i*self._dt*sv.get_velocity() + 0.5*sv.get_acceleration()*(i*self._dt)**2
+                pred_ego_location = ego_path[i][0]
+                if pred_ego_location.distance(pred_sur_location) < self._safetygap:
+                    print('Collision detected!!!!!!!!!!!!!')
+                    return True
+        return False
