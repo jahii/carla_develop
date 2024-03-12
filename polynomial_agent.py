@@ -35,6 +35,7 @@ from CubicSpline import cubic_spline_planner
 
 class QuarticPolynomial:
 
+    # position_start, velocity_start, accel_start, velocity_end, accel_end
     def __init__(self, xs, vxs, axs, vxe, axe, time):
         # calc coefficient of quartic polynomial
 
@@ -160,7 +161,7 @@ class PolynomialAgent(object):
         self._prev_d, self._cur_d = 0.0, 0.0
         self._args_lateral_dict = {'K_P': 1.95, 'K_I': 0.05, 'K_D': 0.2, 'dt': self._dt}
         self._args_longitudinal_dict = {'K_P': 0.75, 'K_I': 0.1, 'K_D': 0, 'dt': self._dt}
-        self._desired_acceleration = 5.0 # [m/s^2]
+        self._desired_acceleration = 3.0 # [m/s^2]
         self._max_throt = 0.75
         self._max_brake = 0.3
         self._max_steer = 0.8
@@ -182,8 +183,8 @@ class PolynomialAgent(object):
         # Path Parameter
         self._max_road_width = 4.0
         self._lateral_no = 3
-        self._MIN_T = 1.0
-        self._MAX_T = 3.0
+        self._MIN_T = 4.0
+        self._MAX_T = 6.0
         self._speed_range = 50.0 / 3.6 # [m/s]
         self._longitudinal_no = 4
         self._max_accel = 10.0 # [m/s^2]
@@ -191,9 +192,9 @@ class PolynomialAgent(object):
 
         # Path Cost weights
         self._K_J = 0.1
-        self._K_T = 0.1
-        self._K_D1 = 0.1
-        self._K_D2 = 10.0
+        self._K_T = 5.0
+        self._K_D1 = 1.0
+        self._K_D2 = 1.0
         self._K_LAT = 1.0
         self._K_LON = 1.0
 
@@ -216,12 +217,9 @@ class PolynomialAgent(object):
                                                         max_throttle=self._max_throt,
                                                         max_brake=self._max_brake,
                                                         max_steering=self._max_steer)
-        # self.cur_waypoint = self._map.get_waypoint(self._vehicle.get_location())
-        # self._waypoints_queue.append((self.cur_waypoint))
 
 
     def run_step(self, debug = False):
-
         if self._arrived :
             control = carla.VehicleControl()
             control.throttle = 0.0
@@ -235,9 +233,6 @@ class PolynomialAgent(object):
 
 
         #################################################
-        start= time.time()
-
-
 
         vehicle_speed = get_speed(self._vehicle) # [Km/h]
         vehicle_speed_mps = vehicle_speed / 3.6
@@ -275,20 +270,37 @@ class PolynomialAgent(object):
         # VEHICLE Current STATUS ####################################################### 
         si_d, si_dd, di, di_d, di_dd = self._get_vehicle_status(csp)
 
-        if abs(si_dd) > self._max_accel:
-            si_dd = np.clip(si_dd, -self._max_accel,self._max_accel)
+        # Limit current acceleration
+        si_dd = np.clip(si_dd, -self._max_accel,self._max_accel)
 
-        inter1 = time.time()-start
 
-        
-        print('vehicle speed :',vehicle_speed_mps,'[m/s]')
+        print('vehicle speed :',round(vehicle_speed_mps,3),'[m/s]', round(vehicle_speed_mps*3.6,3),'[km/h]')
         print('vehicle acceleration :',vehicle_acceleration_mps,'[m/s^2]')
+
+        # 근처에 있는 wp 지우기
+        num_remove_wp = 0
+        for i in range(len(self._path)):
+            if self._path[i][0].distance(vehicle_location) < self._base_range+vehicle_speed_mps*self._dt:
+                num_remove_wp+=1
+            else:
+                break
+        for _ in range(num_remove_wp):
+            self._path.popleft()
+        for i in range(len(self._path)):
+            self._debug.draw_point(self._path[i][0],0.1,carla.Color(0,255,0,100),0.1)
+        print('Number of Removed point:',num_remove_wp)
         # path generation ##############################################################
-        if self._risk_assessment(self._path) or not self._path:
+        
+        if self._risk_assessment(self._path) or not self._path or time.time()-self.path_generation_time> 1.5:
+            self.path_generation_time = time.time()
             # USING current vehicle status #################################################
-            print(self._path)
+            # Path Initialize
+
+            if self._path: # path가 있었으면 현재 가장 가까운 계획경로로부터
+                path_frenet = self._frenet_optimal_planning(csp, self._path[0][2]['si_d'],self._path[0][2]['si_dd'],self._path[0][2]['di'],self._path[0][2]['di_d'],self._path[0][2]['di_dd']) ## 여기 바꾸기
+            else: # 없었으면 현재 state로부터 optimal path 찾기
+                path_frenet = self._frenet_optimal_planning(csp, si_d, si_dd, di, di_d, di_dd)
             self._path = deque(maxlen=10000)
-            path_frenet = self._frenet_optimal_planning(csp, si_d, si_dd, di, di_d, di_dd)
             if not path_frenet:
                 control = carla.VehicleControl()
                 control.throttle = 0.0
@@ -297,73 +309,29 @@ class PolynomialAgent(object):
                 control.hand_brake = False
                 return control
             for i in range(len(path_frenet.x)):
-                self._path.append([carla.Location(x=path_frenet.x[i],y=path_frenet.y[i],z=0.3),path_frenet.ds[i]/self._dt*3.6])
-        
-        num_remove_wp = 0
-        for i in range(len(self._path)):
-            if self._path[i][0].distance(vehicle_location) < self._base_range+vehicle_speed_mps*self._dt:
-                num_remove_wp+=1
-            else:
-                break
-        print('Number of Removed point:',num_remove_wp)
-        for _ in range(num_remove_wp):
-            self._path.popleft()
-        for num in range(len(self._path)):
-            self._debug.draw_point(self._path[num][0],0.1,carla.Color(0,255,0,100),0.1)
-        # USING trajectory planning ################################################## 
-        # path = self._frenet_optimal_planning(csp, self._si_d, self._si_dd, self._di, self._di_d, self._di_dd)
-        # self._si_d, self._si_dd, self._di, self._di_d, self._di_dd = path.s_d[1], path.s_dd[1], path.d[1],path.d_d[1],path.d_dd[1]
-        inter1 = time.time()-start
+                concised_frenet = {'si_d':path_frenet.s_d[i],'si_dd':path_frenet.s_dd[i],'di':path_frenet.d[i] ,'di_d':path_frenet.d_d[i],'di_dd':path_frenet.d_dd[i]}
+                self._path.append([carla.Location(x=path_frenet.x[i],y=path_frenet.y[i],z=0.3), path_frenet.ds[i]/self._dt*3.6, concised_frenet])
+            # _path[i] = [waypoint, 속도, frenet frame coordinate={'si_d','si_dd','di','di_d','di_dd'}]
+    
 
-        ################################################### TEMP
-        # next_wp = ego_wp.next(10.0)[0]
-        print('s_d',si_d,'s_dd', si_dd,'d', di,'d_d', di_d,'d_dd', di_dd)
 
-        if not self._path:
-            control = carla.VehicleControl()
-            control.throttle = 0.0
-            control.steer = 0.0
-            control.brake = self._max_brake
-            control.hand_brake = False
-            return control
-        
+
         next_wp = carla.Transform(self._path[0][0])
-        # cur_yaw = path.yaw[0]
-        # if not any([abs(yaw - cur_yaw) > math.pi/36 for yaw in path.yaw]):
-        #     next_wp = carla.Transform(carla.Location(x=path.x[-1],y=path.y[-1]), carla.Rotation(yaw = path.yaw[-1]*180/math.pi))
-        # else:
-        #     print('TURNING!!!!!')
-        # print("WHERE are u going? s:", path.s[1],'d:',path.d[1])
 
         #################################################### Throttle, Steering Controller
         next_speed = self._path[0][1] #[km/h]
-        con_speed = max(next_speed, 10.0) #[km/h]
+
         print('next speed:', next_speed / 3.6 , next_speed)
         control = self._vehicle_controller.run_step(next_speed, next_wp)
         if vehicle_acceleration_mps > self._max_accel-2 :
             control.throttle = 0.0
 
-        inter2 = time.time()-(inter1+start)
-        #################################################### Ackermann Controller
-        # con_steer = path.yaw[1]-self._vehicle.get_transform().rotation.yaw*math.pi/180
-        # con_speed = max(path.ds[1],15.0)
-        # con_accel = max((path.ds[1]-path.ds[0])/self._dt,40.0)
-        # con_jerk = 10
-        # control = carla.VehicleAckermannControl(steer=con_steer, speed=con_speed, acceleration=con_accel,jerk = con_jerk )
-        # print('yaw:',con_steer,'speed:',con_speed,'accel:', con_accel)
-        # self._debug.draw_point(carla.Location(x=path.x[-1],y=path.y[-1],z=0.3),0.5, color = carla.Color(r=1,g=0,b=1),life_time=0.1)
-        
-        
-        # print('sqrt(s_dd^2+di_dd^2)',math.hypot(si_dd,di_dd))
-        
         print('Throttle',control.throttle)
         if control.brake > 0.0 :
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(255,0,0,0),life_time=0.1)
             print('Brake', control.brake)
-            # print('speeds:', path.ds)
         else:
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(0,255,0,1),life_time=0.1)
-        print(inter1, inter2)
 
         print('',end='\n\n')
         if vehicle_location.distance(self._destination) < 1.0:
@@ -412,9 +380,14 @@ class PolynomialAgent(object):
 
 
     def _frenet_optimal_planning(self, ref_path, si_d, si_dd, di, di_d, di_dd):
+        clock1 = time.time()
         fplist = self._calc_frenet_paths(si_d, si_dd, di, di_d, di_dd)
+        clock2 = time.time()
         fplist = self._calc_global_paths(fplist, ref_path)
+        clock3 = time.time()
         fplist = self._check_paths(fplist)
+        clock4 = time.time()
+        print(clock2-clock1, clock3-clock2, clock4-clock3)
         # print(len(fplist))
 
         # find minimum cost path
@@ -428,6 +401,7 @@ class PolynomialAgent(object):
         # print(len(best_path.x),len(best_path.t))
         if not best_path:
             return None
+        # print(best_path.t[-1], best_path.s_d)
 ###########################
         return best_path
 
@@ -435,7 +409,7 @@ class PolynomialAgent(object):
 
     def _calc_frenet_paths(self, si_d, si_dd, di, di_d, di_dd):
         frenet_paths = []
-        # generate path to each offset goal
+        # generate path to each offset
         LEFT = self._max_road_width
         RIGHT = -self._max_road_width
         print('Lane_change:',self._ego_wp.lane_change)
@@ -448,9 +422,10 @@ class PolynomialAgent(object):
         else:
             LEFT = 0.1
             RIGHT = -0.1
-
+        
+        # Lateral segment
         for df in np.linspace(RIGHT, LEFT, self._lateral_no):
-            
+            # Time segment
             for Ti in np.linspace(self._MIN_T, self._MAX_T, 3):
                 fp = FrenetPath()
                 lat_qp = QuinticPolynomial(di, di_d, di_dd, df, 0.0, 0.0, Ti)
@@ -464,17 +439,17 @@ class PolynomialAgent(object):
                 # Longitudinal motion planning (Velocity keeping)
 
                 # target speed 바꾸기!
-                UPPER_SPEED = si_d + 3*self._desired_acceleration
-                LOWER_SPEED = si_d - 3*self._desired_acceleration
+                UPPER_SPEED = si_d + Ti*self._desired_acceleration
+                LOWER_SPEED = si_d - Ti*self._desired_acceleration
                 if LOWER_SPEED < self._target_speed < UPPER_SPEED:
-                    n_level = (UPPER_SPEED-self._target_speed)//((2*3*self._desired_acceleration)/(self._longitudinal_no+1))
-                    UPPER_SPEED = self._target_speed + n_level*(2*3*self._desired_acceleration)/(self._longitudinal_no+1)
-                    LOWER_SPEED = self._target_speed - (self._longitudinal_no-n_level-1)*(2*3*self._desired_acceleration)/(self._longitudinal_no+1)
+                    n_level = (UPPER_SPEED-self._target_speed)//((2*Ti*self._desired_acceleration)/(self._longitudinal_no+1))
+                    UPPER_SPEED = self._target_speed + n_level*(2*Ti*self._desired_acceleration)/(self._longitudinal_no+1)
+                    LOWER_SPEED = self._target_speed - (self._longitudinal_no-n_level-1)*(2*Ti*self._desired_acceleration)/(self._longitudinal_no+1)
                 for tv in np.linspace(max(LOWER_SPEED,0.1),
                                     UPPER_SPEED, self._longitudinal_no):
                     tfp = copy.deepcopy(fp)
-                    # lon_qp = QuarticPolynomial(0, si_d, si_dd, tv, 0.0, Ti)
-                    lon_qp = QuarticPolynomial(0, si_d, si_dd, tv, 0.0, Ti) 
+                    lon_qp = QuarticPolynomial(0, si_d, si_dd, tv, 0.0, Ti)
+                    # lon_qp = QuarticPolynomial(0, si_d, 0, tv, 0.0, Ti) 
 
                     tfp.s = [lon_qp.calc_point(t) for t in fp.t]
                     tfp.s_d = [lon_qp.calc_first_derivative(t) for t in fp.t]
@@ -498,15 +473,13 @@ class PolynomialAgent(object):
         return frenet_paths
 
 
-
     def _calc_global_paths(self, fplist, ref_path):
         for fp in fplist:
-
             # calc global positions
             for i in range(len(fp.s)):
                 ix, iy = ref_path.calc_position(fp.s[i])
                 if ix is None:
-                    print(i, fp.s)
+                    # print(i, fp.s)
                     break
                 i_yaw = ref_path.calc_yaw(fp.s[i])
                 di = fp.d[i]
@@ -534,22 +507,18 @@ class PolynomialAgent(object):
 
     def _check_paths(self, fplist):
         ok_ind = []
-        violated = False
+        
         reason = [0,0,0,0]
         MAX_SPEED = self._target_speed + self._speed_range
-        for i, _ in enumerate(fplist):
+        for i, _ in enumerate(fplist): # Each trajectory
+            violated = False
             if any([v > MAX_SPEED for v in fplist[i].s_d]):  # Max speed check
-                # print('speed violated')
                 violated = True
                 reason[0]+=1
-            elif any([abs(a) > self._max_accel for a in
-                    fplist[i].s_dd]):  # Max accel check
-                # print('accel violated',fplist[i].s_dd)
+            elif any([abs(a) > self._max_accel for a in fplist[i].s_dd]):  # Max accel check
                 violated = True
                 reason[1]+=1
-            elif any([abs(c) > self._max_curvature for c in
-                    fplist[i].c]):  # Max curvature check
-                # print('curvature violated')
+            elif any([abs(c) > self._max_curvature for c in fplist[i].c]):  # Max curvature check
                 violated = True
                 reason[2]+=1
             elif not self._check_collision(fplist[i]):
@@ -562,19 +531,8 @@ class PolynomialAgent(object):
             else:
                 for num in range(len(fplist[i].x)):
                     self._debug.draw_point(carla.Location(x=fplist[i].x[num],y=fplist[i].y[num],z=0.3),0.1,carla.Color(255,0,0),0.1)
-                
-            violated = False
         if not ok_ind:
             print('vel, accel, curvature, Collision',reason)
-            ############################################ DEBUGGING Acceleration
-            if reason[0]==0 and reason[2]==0 and reason[3]==0:
-                print('WHY ACCELERATION Violated')
-                for i in fplist:
-                    print(i.s_dd)
-            if reason[2]:
-                for i in fplist:
-                    print(i.c)
-
         return [fplist[i] for i in ok_ind]
 
 
@@ -585,7 +543,7 @@ class PolynomialAgent(object):
                 pred_sur_location = sv.get_location() + i*self._dt*sv.get_velocity() + 0.5*sv.get_acceleration()*(i*self._dt)**2
                 pred_ego_location = carla.Location(x = fp.x[i], y = fp.y[i])
                 if pred_ego_location.distance(pred_sur_location) < self._safetygap:
-                    print('Collision detected!!')
+                    # print('Collision detected!!')
                     return False
         return True
 

@@ -722,14 +722,7 @@ class HUD(object):
             'GNSS:% 24s' % ('(% 2.6f, % 3.6f)' % (world.gnss_sensor.lat, world.gnss_sensor.lon)),
             'Height:  % 18.0f m' % t.location.z,
             '']
-        ########
-        a = world.player.get_acceleration()
-        # print('Speed   ', v.length())    
-        # print('Accelero', a.length())
-        # print('')
-        # if math.hypot(world.imu_sensor.accelerometer[0],world.imu_sensor.accelerometer[1])>10:
-        #     print('Accelero:', math.hypot(world.imu_sensor.accelerometer[0],world.imu_sensor.accelerometer[1]))
-        ########
+
         if isinstance(c, carla.VehicleControl):
             self._info_text += [
                 ('Throttle:', c.throttle, 0.0, 1.0),
