@@ -149,10 +149,15 @@ class FrenetPath:
 class PolynomialAgent(object):
 
     def __init__(self, vehicle, target_speed=50):
-        self._vehicle = vehicle
+        self.status = 'STATUS INITIALIZING'
+        self.lead_gap = None
+        self.follow_gap = None
+        self.vehicle = vehicle
         self._world=vehicle.get_world()
         self._map = self._world.get_map()
         self._target_speed = target_speed / 3.6 # [km/h to m/s]
+        self.LV = None
+        self.FV = None
         
         # Base Parameter
         opt_dict = {}
@@ -175,18 +180,19 @@ class PolynomialAgent(object):
         self._stop_waypoint_creation = False
         self._debug = self._world.debug
         self._destination = None
-        self._safetygap = 2.5
+        self._safetygap = 1.0
         self._start_emergency = None
         self._ego_wp = None
         self._unitlength = 3.0
+        
 
         # Path Parameter
         self._max_road_width = 4.0
         self._lateral_no = 3
-        self._MIN_T = 4.0
-        self._MAX_T = 6.0
+        self._MIN_T = 3.0
+        self._MAX_T = 5.0
         self._speed_range = 50.0 / 3.6 # [m/s]
-        self._longitudinal_no = 4
+        self._longitudinal_no = 3
         self._max_accel = 10.0 # [m/s^2]
         self._max_curvature = 3.0 # [1/m]
 
@@ -210,7 +216,7 @@ class PolynomialAgent(object):
         self._arrived = False
 
     def _init_controller(self):
-        self._vehicle_controller = VehiclePIDController(self._vehicle,
+        self._vehicle_controller = VehiclePIDController(self.vehicle,
                                                         args_lateral=self._args_lateral_dict,
                                                         args_longitudinal=self._args_longitudinal_dict,
                                                         offset=self._offset,
@@ -229,14 +235,14 @@ class PolynomialAgent(object):
             return control
         self._isdebug = debug
         
-        vehicle_location = self._vehicle.get_location()
+        vehicle_location = self.vehicle.get_location()
 
-
+        
         #################################################
 
-        vehicle_speed = get_speed(self._vehicle) # [Km/h]
+        vehicle_speed = get_speed(self.vehicle) # [Km/h]
         vehicle_speed_mps = vehicle_speed / 3.6
-        vehicle_acceleration = get_acceleration(self._vehicle)
+        vehicle_acceleration = get_acceleration(self.vehicle)
         vehicle_acceleration_mps = vehicle_acceleration / 3.6
 
 
@@ -289,8 +295,8 @@ class PolynomialAgent(object):
         for i in range(len(self._path)):
             self._debug.draw_point(self._path[i][0],0.1,carla.Color(0,255,0,100),0.1)
         print('Number of Removed point:',num_remove_wp)
+
         # path generation ##############################################################
-        
         if self._risk_assessment(self._path) or not self._path or time.time()-self.path_generation_time> 1.5:
             self.path_generation_time = time.time()
             # USING current vehicle status #################################################
@@ -323,15 +329,13 @@ class PolynomialAgent(object):
 
         print('next speed:', next_speed / 3.6 , next_speed)
         control = self._vehicle_controller.run_step(next_speed, next_wp)
-        if vehicle_acceleration_mps > self._max_accel-2 :
-            control.throttle = 0.0
 
         print('Throttle',control.throttle)
         if control.brake > 0.0 :
-            self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(255,0,0,0),life_time=0.1)
+            self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self.vehicle.bounding_box.location.z),self.vehicle.bounding_box.extent),self.vehicle.get_transform().rotation,color = carla.Color(255,0,0,0),life_time=0.1)
             print('Brake', control.brake)
         else:
-            self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self._vehicle.bounding_box.location.z),self._vehicle.bounding_box.extent),self._vehicle.get_transform().rotation,color = carla.Color(0,255,0,1),life_time=0.1)
+            self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self.vehicle.bounding_box.location.z),self.vehicle.bounding_box.extent),self.vehicle.get_transform().rotation,color = carla.Color(0,255,0,1),life_time=0.1)
 
         print('',end='\n\n')
         if vehicle_location.distance(self._destination) < 1.0:
@@ -346,11 +350,40 @@ class PolynomialAgent(object):
 
         return control
 
+    def get_lead_follow_vehicles(self, r = 100.0):
 
-
+        SVs = self._surrounded_vehicles(r)
+        self.LV, self.FV = None, None
+        lead_gap_cand = float('inf')
+        follow_gap_cand = float('inf')
+        
+        for sv in SVs:
+            lateral_diff = self.vehicle.get_location().x-sv.get_location().x
+            longitudinal_diff = self.vehicle.get_location().y-sv.get_location().y
+            if 0 < lateral_diff < self._max_road_width: # 옆 차선에 있을 때
+                if longitudinal_diff < 0: # Ego가 앞에 있을 때
+                    gap = self._gap_btw_two(self.vehicle,sv)
+                    if gap < follow_gap_cand:
+                        self.FV = sv
+                        follow_gap_cand = gap
+                else: # Ego가 뒤에 있을 때
+                    gap = self._gap_btw_two(sv, self.vehicle)
+                    if gap < lead_gap_cand:
+                        self.LV = sv
+                        lead_gap_cand = gap
+        if lead_gap_cand != float('inf'):
+            self.lead_gap = lead_gap_cand
+        else:
+            self.lead_gap = None
+        if follow_gap_cand != float('inf'):
+            self.follow_gap = follow_gap_cand
+        else:
+            self.follow_gap = None
+        return
+    
     def getforwardwaypoints(self, pathlength, vel_mps):
         waypoints = []
-        start_wp = self._map.get_waypoint(self._vehicle.get_location())
+        start_wp = self._map.get_waypoint(self.vehicle.get_location())
         from_veh = max(0.5,vel_mps*self._dt)
         start_wp=start_wp.next(from_veh)[0]
         waypoints.append(start_wp)
@@ -358,19 +391,21 @@ class PolynomialAgent(object):
             waypoints.append(start_wp.next(i)[0])
         return waypoints
 
+    def _gap_btw_two(self, leading_veh, following_veh):
+        return  (following_veh.get_location().y-following_veh.bounding_box.location.x-following_veh.bounding_box.extent.x) - (leading_veh.get_location().y-leading_veh.bounding_box.location.x+leading_veh.bounding_box.extent.x)
 
     def _get_vehicle_status(self, ref_path):
         curvature = ref_path.calc_curvature(0)
         tan_angle = ref_path.calc_yaw(0)
         norm_angle =  tan_angle+math.pi/2
-        x_d, y_d = self._vehicle.get_velocity().x, self._vehicle.get_velocity().y
-        x_dd, y_dd = self._vehicle.get_acceleration().x, self._vehicle.get_acceleration().y
+        x_d, y_d = self.vehicle.get_velocity().x, self.vehicle.get_velocity().y
+        x_dd, y_dd = self.vehicle.get_acceleration().x, self.vehicle.get_acceleration().y
         ref_x, ref_y = ref_path.calc_position(0)
 
         s_d = x_d*math.cos(tan_angle) + y_d*math.sin(tan_angle)
         s_dd = x_dd*math.cos(tan_angle) + y_dd*math.sin(tan_angle)
 
-        d = -(self._vehicle.get_location().x-ref_x)*math.cos(norm_angle)-(self._vehicle.get_location().y-ref_y)*math.sin(norm_angle)
+        d = -(self.vehicle.get_location().x-ref_x)*math.cos(norm_angle)-(self.vehicle.get_location().y-ref_y)*math.sin(norm_angle)
         
         d_d = -x_d*math.cos(norm_angle) - y_d*math.sin(norm_angle)
         d_dd = - x_dd*math.cos(norm_angle) - y_dd*math.sin(norm_angle)
@@ -507,7 +542,6 @@ class PolynomialAgent(object):
 
     def _check_paths(self, fplist):
         ok_ind = []
-        
         reason = [0,0,0,0]
         MAX_SPEED = self._target_speed + self._speed_range
         for i, _ in enumerate(fplist): # Each trajectory
@@ -547,18 +581,16 @@ class PolynomialAgent(object):
                     return False
         return True
 
-
     def set_destination(self, end_location):
         self._destination = end_location
         return None
 
     def _surrounded_vehicles(self, radius = 50.0):
         sur_vehicles = []
-        world = self._vehicle.get_world()
-        vehicles = world.get_actors().filter('vehicle.*')
+        vehicles = self._world.get_actors().filter('vehicle.*')
         for veh in vehicles:
-            if veh.id != self._vehicle.id:
-                veh_to_ego = veh.get_location().distance(self._vehicle.get_location())
+            if veh.id != self.vehicle.id:
+                veh_to_ego = veh.get_location().distance(self.vehicle.get_location())
                 if veh_to_ego < radius:
                     sur_vehicles.append(veh)
         return sur_vehicles

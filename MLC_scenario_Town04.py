@@ -1,4 +1,5 @@
 import random
+import datetime
 from time import sleep
 import numpy as np
 import glob
@@ -36,16 +37,19 @@ from carla import ColorConverter as cc
 import carla
 from agents.tools.misc import *
 
+# ==============================================================================
+# -- DisplayManager ------------------------------------------------------------
+# ==============================================================================
+
 class DisplayManager(object):
 
-    def __init__(self,veh,SIZE):
+    def __init__(self, veh, SIZE):
         self.surface = None
         self.world = veh.get_world()
         self.bp_lib = self.world.get_blueprint_library()
         self.spawn_point = veh.get_transform()
         self.Cameara_back_dist = 7.0
 
-        
         Attach_Camera_pos_x = -self.Cameara_back_dist # *math.cos(math.pi/180*self.spawn_point.rotation.yaw)
         Attach_Camera_pos_y = 0 # -self.Cameara_back_dist*math.sin(math.pi/180*self.spawn_point.rotation.yaw)
         Camera_pos_z = 5.0
@@ -83,7 +87,166 @@ class DisplayManager(object):
         array = array[:, :, ::-1]
         self.surface = pygame.surfarray.make_surface(array.swapaxes(0,1))
 
+# ==============================================================================
+# -- FadingText ----------------------------------------------------------------
+# ==============================================================================
 
+
+class FadingText(object):
+    def __init__(self, font, dim, pos):
+        self.font = font
+        self.dim = dim
+        self.pos = pos
+        self.seconds_left = 0
+        self.surface = pygame.Surface(self.dim)
+
+    def set_text(self, text, color=(255, 255, 255), seconds=2.0):
+        text_texture = self.font.render(text, True, color)
+        self.surface = pygame.Surface(self.dim)
+        self.seconds_left = seconds
+        self.surface.fill((0, 0, 0, 0))
+        self.surface.blit(text_texture, (10, 11))
+
+    def tick(self, clock):
+        delta_seconds = 1e-3 * clock.get_time()
+        self.seconds_left = max(0.0, self.seconds_left - delta_seconds)
+        self.surface.set_alpha(500.0 * self.seconds_left)
+
+    def render(self, display):
+        display.blit(self.surface, self.pos)
+
+# ==============================================================================
+# -- HUD -----------------------------------------------------------------------
+# ==============================================================================
+
+class HUD(object):
+    def __init__(self, width, height, Agents):
+        self.dim = (width, height)
+        self.ego_agent, self.FV_agent, self.LV_agent = Agents
+        font = pygame.font.Font(pygame.font.get_default_font(), 20)
+        font_name = 'courier' if os.name == 'nt' else 'mono'
+        fonts = [x for x in pygame.font.get_fonts() if font_name in x]
+        default_font = 'ubuntumono'
+        mono = default_font if default_font in fonts else fonts[0]
+        mono = pygame.font.match_font(mono)
+        self._font_mono = pygame.font.Font(mono, 12 if os.name == 'nt' else 14)
+        self._notifications = FadingText(font, (width//4, 40), (0, height - 40))
+        self.server_fps = 0
+        self.frame = 0
+        self.simulation_time = 0
+        self.start_time = float('inf')
+        self.follow_gap = float('inf')
+        self.leading_gap = float('inf')
+        self._show_info = True
+        self._info_text = []
+        self._server_clock = pygame.time.Clock()
+        self._show_ackermann_info = False
+        self._ackermann_control = carla.VehicleAckermannControl()
+
+    def on_world_tick(self, timestamp):
+        self._server_clock.tick()
+        self.server_fps = self._server_clock.get_fps()
+        self.frame = timestamp.frame
+        self.simulation_time = timestamp.elapsed_seconds
+        if self.start_time==float('inf'):
+            self.start_time = timestamp.elapsed_seconds
+        
+    def tick(self, clock, c):
+        self._notifications.tick(clock)
+        if not self._show_info:
+            return
+        # t = world.player.get_transform()
+        # v = world.player.get_velocity()
+        # c = world.player.get_control()
+
+        # colhist = world.collision_sensor.get_collision_history()
+        # collision = [colhist[x + self.frame - 200] for x in range(0, 200)]
+        # max_col = max(1.0, max(collision))
+        # collision = [x / max_col for x in collision]
+        # vehicles = world.world.get_actors().filter('vehicle.*')
+        self._info_text = [
+            'Server:  % 16.0f FPS' % self.server_fps,
+            'Client:  % 16.0f FPS' % clock.get_fps(),
+            '',
+            'Simulation time: % 12s' % datetime.timedelta(seconds=int(self.simulation_time-self.start_time)),
+            '',
+            'Ego Veh Speed: % 10.2f km/h' % get_speed(self.ego_agent.vehicle),
+            'FV Speed: % 15.2f km/h' % get_speed(self.FV_agent._vehicle),
+            'LV Speed: % 15.2f km/h' % get_speed(self.LV_agent._vehicle),
+            '']
+        if self.ego_agent.follow_gap != None:
+            self._info_text+=[
+                'Follow gap : % 14.2f m' % self.ego_agent.follow_gap
+            ]
+        else:
+            self._info_text+=[
+                'Follow gap :         Not Found'
+            ]
+        if self.ego_agent.lead_gap != None:
+            self._info_text+=[
+                'Lead gap : % 16.2f m' % self.ego_agent.lead_gap
+            ]
+        else:
+            self._info_text+=[
+                'Lead gap :           Not Found'
+            ]
+
+
+        if isinstance(c, carla.VehicleControl):
+            self._info_text += [
+                ('Throttle:', c.throttle, 0.0, 1.0),
+                ('Steer:', c.steer, -1.0, 1.0),
+                ('Brake:', c.brake, 0.0, 1.0),
+                ('Reverse:', c.reverse),
+                ('Hand brake:', c.hand_brake),
+                ('Manual:', c.manual_gear_shift),
+                'Gear:        %s' % {-1: 'R', 0: 'N'}.get(c.gear, c.gear)]
+            if self._show_ackermann_info:
+                self._info_text += [
+                    '',
+                    'Ackermann Controller:',
+                    '  Target speed: % 8.0f km/h' % (3.6*self._ackermann_control.speed),
+                ]
+
+    def notification(self, text, seconds=2.0):
+        self._notifications.set_text(text, seconds=seconds)
+
+    def render(self, display):
+        if self._show_info:
+            info_surface = pygame.Surface((220, self.dim[1]))
+            info_surface.set_alpha(100)
+            display.blit(info_surface, (0, 0))
+            v_offset = 4
+            bar_h_offset = 100
+            bar_width = 106
+            for item in self._info_text:
+                if v_offset + 18 > self.dim[1]:
+                    break
+                if isinstance(item, list):
+                    if len(item) > 1:
+                        points = [(x + 8, v_offset + 8 + (1.0 - y) * 30) for x, y in enumerate(item)]
+                        pygame.draw.lines(display, (255, 136, 0), False, points, 2)
+                    item = None
+                    v_offset += 18
+                elif isinstance(item, tuple):
+                    if isinstance(item[1], bool):
+                        rect = pygame.Rect((bar_h_offset, v_offset + 8), (6, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect, 0 if item[1] else 1)
+                    else:
+                        rect_border = pygame.Rect((bar_h_offset, v_offset + 8), (bar_width, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect_border, 1)
+                        f = (item[1] - item[2]) / (item[3] - item[2])
+                        if item[2] < 0.0:
+                            rect = pygame.Rect((bar_h_offset + f * (bar_width - 6), v_offset + 8), (6, 6))
+                        else:
+                            rect = pygame.Rect((bar_h_offset, v_offset + 8), (f * bar_width, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect)
+                    item = item[0]
+                if item:  # At this point has to be a str.
+                    surface = self._font_mono.render(item, True, (255, 255, 255))
+                    display.blit(surface, (8, v_offset))
+                v_offset += 18
+        self._notifications.render(display)
 
 def main():
     client = carla.Client('127.0.0.1', 2000)
@@ -98,6 +261,7 @@ def main():
             (WIDTH, HEIGHT),
             pygame.HWSURFACE | pygame.DOUBLEBUF)
         clock = pygame.time.Clock()
+        
 
         # Connect to the client and retrieve the world object
         spectator = world.get_spectator()
@@ -116,7 +280,7 @@ def main():
         # Spawning vehicles
         ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=150.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=190.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        LV_spawn_point = carla.Transform(carla.Location(x=12.42, y=100.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        LV_spawn_point = carla.Transform(carla.Location(x=12.42, y=120.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         ego_veh = world.spawn_actor(dodge_model, ego_spawn_point)
         FV_veh = world.spawn_actor(benz_model, FV_spawn_point)
         LV_veh = world.spawn_actor(nissan_model, LV_spawn_point)
@@ -131,18 +295,20 @@ def main():
         Camera_pos_z = 90
         Camera_pos = carla.Transform(carla.Location(x=Camera_pos_x, y=Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-50,yaw = FV_spawn_point.rotation.yaw))
         # Behind Ego
-        # Camera_pos_z = 5.0
-        # Camera_pos_x = ego_spawn_point.location.x - 7*math.cos(math.pi/180*ego_spawn_point.rotation.yaw)
-        # Camera_pos_y = ego_spawn_point.location.y - 7*math.sin(math.pi/180*ego_spawn_point.rotation.yaw)
-        # Camera_pos = carla.Transform(carla.Location(x=Camera_pos_x, y=Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-20.0,yaw = ego_spawn_point.rotation.yaw))
+        """
+        Camera_pos_z = 5.0
+        Camera_pos_x = ego_spawn_point.location.x - 7*math.cos(math.pi/180*ego_spawn_point.rotation.yaw)
+        Camera_pos_y = ego_spawn_point.location.y - 7*math.sin(math.pi/180*ego_spawn_point.rotation.yaw)
+        Camera_pos = carla.Transform(carla.Location(x=Camera_pos_x, y=Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-20.0,yaw = ego_spawn_point.rotation.yaw))
+        """
         spectator.set_transform(Camera_pos)
 
 
         # Display Setting
         display_manager = DisplayManager(ego_veh,(WIDTH,HEIGHT))
-        # display_manager.spectator_to_vehicle()
+        
 
-        sleep(0.3)
+        sleep(0.2)
 
         # Mark vehicle spawning point 
         world_snapshot = world.get_snapshot()
@@ -161,23 +327,26 @@ def main():
         end_wp = start_wp.next(250.0)[0]
         ego_agent.set_destination(end_wp.transform.location)
         FV_agent.set_destination(carla.Location(x=12.9, y=20.0, z=0.3))
-        LV_agent.set_destination(carla.Location(x=12.9, y=20.0, z=0.3))
+        LV_agent.set_destination(carla.Location(x=12.9, y=-50.0, z=0.3))
         
         start = time.time()
-
+        hud = HUD(WIDTH,HEIGHT,[ego_agent,FV_agent,LV_agent])
+        world.on_tick(hud.on_world_tick)
+        sleep(0.1)
+        control_ego = carla.VehicleControl
         while True:
-            waypoint = world.get_map().get_waypoint(ego_veh.get_location(),project_to_road=True, lane_type=(carla.LaneType.Driving))
-            clock.tick()
-            end = time.time()
-
+            
             display_manager.render(display)
+            clock.tick()
+            hud.tick(clock, control_ego)
+            hud.notification(ego_agent.status)
+            hud.render(display)
+            
             pygame.display.flip()
-            for event in pygame.event.get():
-                if event.type==pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-
+            ego_agent.get_lead_follow_vehicles()
+            end = time.time()
             if end-start>0.1:
+                start = end
                 # FV control
                 control_FV = FV_agent.run_step(debug=False)
                 control_FV.manual_gear_shift = False
@@ -190,15 +359,13 @@ def main():
 
                 # Ego control
                 control_ego = ego_agent.run_step(debug=True)
-                # control_ego.manual_gear_shift = False
-                if isinstance(control_ego,carla.VehicleControl):
+                if isinstance(control_ego, carla.VehicleControl):
+                    control_ego.manual_gear_shift = False
                     ego_veh.apply_control(control_ego)
                 elif isinstance(control_ego, carla.VehicleAckermannControl):   
                     ego_veh.apply_ackermann_control(control_ego)
-                # ego_veh.apply_ackermann_control(control_ego)
-                start = end
+                
 
-            
             for event in pygame.event.get():
                 if event.type==pygame.QUIT:
                     pygame.quit()
@@ -216,4 +383,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
