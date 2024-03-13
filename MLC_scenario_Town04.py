@@ -120,9 +120,10 @@ class FadingText(object):
 # ==============================================================================
 
 class HUD(object):
-    def __init__(self, width, height, Agents):
+    def __init__(self, width, height, Agent):
         self.dim = (width, height)
-        self.ego_agent, self.FV_agent, self.LV_agent = Agents
+        self.ego_agent = Agent
+
         font = pygame.font.Font(pygame.font.get_default_font(), 20)
         font_name = 'courier' if os.name == 'nt' else 'mono'
         fonts = [x for x in pygame.font.get_fonts() if font_name in x]
@@ -130,7 +131,7 @@ class HUD(object):
         mono = default_font if default_font in fonts else fonts[0]
         mono = pygame.font.match_font(mono)
         self._font_mono = pygame.font.Font(mono, 12 if os.name == 'nt' else 14)
-        self._notifications = FadingText(font, (width//4, 40), (0, height - 40))
+        self._notifications = FadingText(font, (width//4, 40), (220, 0))
         self.server_fps = 0
         self.frame = 0
         self.simulation_time = 0
@@ -170,26 +171,34 @@ class HUD(object):
             '',
             'Simulation time: % 12s' % datetime.timedelta(seconds=int(self.simulation_time-self.start_time)),
             '',
-            'Ego Veh Speed: % 10.2f km/h' % get_speed(self.ego_agent.vehicle),
-            'FV Speed: % 15.2f km/h' % get_speed(self.FV_agent._vehicle),
-            'LV Speed: % 15.2f km/h' % get_speed(self.LV_agent._vehicle),
+            'Ego Veh Speed: % 9.2f km/h' % get_speed(self.ego_agent.vehicle),
             '']
-        if self.ego_agent.follow_gap != None:
-            self._info_text+=[
-                'Follow gap : % 14.2f m' % self.ego_agent.follow_gap
-            ]
-        else:
-            self._info_text+=[
-                'Follow gap :         Not Found'
-            ]
         if self.ego_agent.lead_gap != None:
             self._info_text+=[
-                'Lead gap : % 16.2f m' % self.ego_agent.lead_gap
+                'LV Speed   : % 11.2f km/h' % get_speed(self.ego_agent.LV),
+                'Lead gap   : % 11.2f m' % self.ego_agent.lead_gap
             ]
         else:
             self._info_text+=[
-                'Lead gap :           Not Found'
+                'LV Speed   :        Not Found',
+                'Lead gap   :        Not Found'
             ]
+        if self.ego_agent.follow_gap != None:
+            self._info_text+=[
+                'FV Speed   : % 11.2f km/h' % get_speed(self.ego_agent.FV),
+                'Follow gap : % 11.2f m' % self.ego_agent.follow_gap
+            ]
+        else:
+            self._info_text+=[
+                'FV Speed   :        Not Found',
+                'Follow gap :        Not Found'
+            ]
+        self._info_text+=[
+            '',
+            'Current lane id : %4.1f'% self.ego_agent._map.get_waypoint(self.ego_agent.vehicle.get_location()).lane_id,
+            'Current lane type : %5s'% self.ego_agent._map.get_waypoint(self.ego_agent.vehicle.get_location()).lane_type,
+            ''
+        ]
 
 
         if isinstance(c, carla.VehicleControl):
@@ -208,8 +217,8 @@ class HUD(object):
                     '  Target speed: % 8.0f km/h' % (3.6*self._ackermann_control.speed),
                 ]
 
-    def notification(self, text, seconds=2.0):
-        self._notifications.set_text(text, seconds=seconds)
+    def notification(self, text, color=(255, 255, 255), seconds=2.0):
+        self._notifications.set_text(text, color, seconds=seconds)
 
     def render(self, display):
         if self._show_info:
@@ -279,8 +288,8 @@ def main():
 
         # Spawning vehicles
         ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=150.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=190.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        LV_spawn_point = carla.Transform(carla.Location(x=12.42, y=120.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=240.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        LV_spawn_point = carla.Transform(carla.Location(x=12.42, y=140.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         ego_veh = world.spawn_actor(dodge_model, ego_spawn_point)
         FV_veh = world.spawn_actor(benz_model, FV_spawn_point)
         LV_veh = world.spawn_actor(nissan_model, LV_spawn_point)
@@ -321,7 +330,7 @@ def main():
         
         ego_agent = PolynomialAgent(ego_veh, 40)
         FV_agent = BasicAgent(FV_veh, 70)
-        LV_agent = BasicAgent(LV_veh, 70)
+        LV_agent = BasicAgent(LV_veh, 40)
         
         start_wp = world.get_map().get_waypoint(ego_veh.get_location())
         end_wp = start_wp.next(250.0)[0]
@@ -330,16 +339,23 @@ def main():
         LV_agent.set_destination(carla.Location(x=12.9, y=-50.0, z=0.3))
         
         start = time.time()
-        hud = HUD(WIDTH,HEIGHT,[ego_agent,FV_agent,LV_agent])
+        hud = HUD(WIDTH,HEIGHT,ego_agent)
         world.on_tick(hud.on_world_tick)
         sleep(0.1)
         control_ego = carla.VehicleControl
+        color = (255, 255, 255)
         while True:
+            ego_agent.get_lead_follow_vehicles()
             
             display_manager.render(display)
             clock.tick()
             hud.tick(clock, control_ego)
-            hud.notification(ego_agent.status)
+            
+            if ego_agent.status == 'GAP APPROACH':
+                color = (255, 255, 0)
+            elif ego_agent.status == 'NEGOTIATION':
+                color = (255, 153, 0)
+            hud.notification(ego_agent.status, color = color)
             hud.render(display)
             
             pygame.display.flip()
@@ -347,6 +363,7 @@ def main():
             end = time.time()
             if end-start>0.1:
                 start = end
+
                 # FV control
                 control_FV = FV_agent.run_step(debug=False)
                 control_FV.manual_gear_shift = False
@@ -364,7 +381,6 @@ def main():
                     ego_veh.apply_control(control_ego)
                 elif isinstance(control_ego, carla.VehicleAckermannControl):   
                     ego_veh.apply_ackermann_control(control_ego)
-                
 
             for event in pygame.event.get():
                 if event.type==pygame.QUIT:

@@ -172,7 +172,7 @@ class PolynomialAgent(object):
         self._max_steer = 0.8
         self._offset = 0
         self._pathminlength = 90.0
-        self._pathlength = 100.0 # [m]
+        self._pathlength = 320.0 # [m]
         self._base_range = 1.0
         self._distance_ratio = 0.5
         self._path = deque(maxlen=10000)
@@ -184,6 +184,8 @@ class PolynomialAgent(object):
         self._start_emergency = None
         self._ego_wp = None
         self._unitlength = 3.0
+        self._speed_diff_criteria = 30.0
+        self._dist_diff_criteria = 40.0
         
 
         # Path Parameter
@@ -195,7 +197,27 @@ class PolynomialAgent(object):
         self._longitudinal_no = 3
         self._max_accel = 10.0 # [m/s^2]
         self._max_curvature = 3.0 # [1/m]
-
+        merging_ref_path_wp = self.getforwardwaypoints(self._pathlength, self.vehicle.get_location())
+        target_ref_path_wp = self.getforwardwaypoints(self._pathlength, carla.Location(x=self.vehicle.get_location().x-4.0, y=self.vehicle.get_location().y, z=self.vehicle.get_location().z))
+        self.merging_csp = self.waypoints_to_csp(merging_ref_path_wp)
+        self.target_csp = self.waypoints_to_csp(target_ref_path_wp)
+        
+        """
+        s = np.arange(0, self.merging_csp.s[-1], 1)
+        for i_s in s:
+            ix, iy = self.merging_csp.calc_position(i_s)
+            self._debug.draw_point(carla.Location(x=ix,y=iy,z=0.3),0.1,carla.Color(0,0,0),5)
+            if i_s !=0:
+                self._debug.draw_line(carla.Location(x=ix,y=iy,z=0.3),carla.Location(x=pix,y=piy,z=0.3),0.1,carla.Color(0,0,0),5)
+            pix, piy = ix, iy
+        s = np.arange(0, self.target_csp.s[-1], 1)
+        for i_s in s:
+            ix, iy = self.target_csp.calc_position(i_s)
+            self._debug.draw_point(carla.Location(x=ix,y=iy,z=0.3),0.1,carla.Color(0,0,0),5)
+            if i_s !=0:
+                self._debug.draw_line(carla.Location(x=ix,y=iy,z=0.3),carla.Location(x=pix,y=piy,z=0.3),0.1,carla.Color(0,0,0),5)
+            pix, piy = ix, iy
+        """
         # Path Cost weights
         self._K_J = 0.1
         self._K_T = 5.0
@@ -205,6 +227,7 @@ class PolynomialAgent(object):
         self._K_LON = 1.0
 
         # Frenet Coordinate
+        self._si=0.0
         self._si_d=0.0
         self._si_dd=0.0
         self._di=0.0
@@ -214,6 +237,7 @@ class PolynomialAgent(object):
         # Initialize controller
         self._init_controller()
         self._arrived = False
+
 
     def _init_controller(self):
         self._vehicle_controller = VehiclePIDController(self.vehicle,
@@ -237,6 +261,11 @@ class PolynomialAgent(object):
         
         vehicle_location = self.vehicle.get_location()
 
+        if self.FV != None:
+            speed_diff = get_speed(self.FV)-get_speed(self.vehicle)
+            if 0.95*self._speed_diff_criteria < speed_diff < 1.05*self._speed_diff_criteria and 0.95*self._dist_diff_criteria < self.follow_gap < 1.05*self._dist_diff_criteria:
+                self.status = 'GAP APPROACH'
+
         
         #################################################
 
@@ -244,44 +273,12 @@ class PolynomialAgent(object):
         vehicle_speed_mps = vehicle_speed / 3.6
         vehicle_acceleration = get_acceleration(self.vehicle)
         vehicle_acceleration_mps = vehicle_acceleration / 3.6
-
+        print('vehicle speed :',round(vehicle_speed_mps,3),'[m/s]', round(vehicle_speed_mps*3.6,3),'[km/h]')
+        print('vehicle acceleration :',vehicle_acceleration_mps,'[m/s^2]')
 
         self._ego_wp = self._map.get_waypoint(vehicle_location)
         if not self._ego_wp:
             print('No ego waypoint')
-
-        # ref_distance = max(min(self._pathminlength,waypoint_distance),self._pathlength)
-        ref_distance = 100.0
-
-        ref_wps = self.getforwardwaypoints(ref_distance,vehicle_speed_mps)
-        
-        wpx, wpy = [], []
-        for wp in ref_wps:
-            wpx.append(wp.transform.location.x)
-            wpy.append(wp.transform.location.y)
-
-
-        # Generate Reference Path
-        csp = cubic_spline_planner.CubicSpline2D(wpx, wpy)
-        s = np.arange(0, csp.s[-1], 1)
-        for i_s in s:
-            ix, iy = csp.calc_position(i_s) 
-            if self._isdebug:
-                self._debug.draw_point(carla.Location(x=ix,y=iy,z=0.3),0.1,carla.Color(0,0,0),0.05)
-                if i_s !=0:
-                    self._debug.draw_line(carla.Location(x=ix,y=iy,z=0.3),carla.Location(x=pix,y=piy,z=0.3),0.1,carla.Color(0,0,0),0.05)
-                pix, piy = ix, iy  
-        
-
-        # VEHICLE Current STATUS ####################################################### 
-        si_d, si_dd, di, di_d, di_dd = self._get_vehicle_status(csp)
-
-        # Limit current acceleration
-        si_dd = np.clip(si_dd, -self._max_accel,self._max_accel)
-
-
-        print('vehicle speed :',round(vehicle_speed_mps,3),'[m/s]', round(vehicle_speed_mps*3.6,3),'[km/h]')
-        print('vehicle acceleration :',vehicle_acceleration_mps,'[m/s^2]')
 
         # 근처에 있는 wp 지우기
         num_remove_wp = 0
@@ -297,15 +294,16 @@ class PolynomialAgent(object):
         print('Number of Removed point:',num_remove_wp)
 
         # path generation ##############################################################
-        if self._risk_assessment(self._path) or not self._path or time.time()-self.path_generation_time> 1.5:
+
+
+        if self._risk_assessment() or not self._path or time.time() - self.path_generation_time > 1.5:
             self.path_generation_time = time.time()
             # USING current vehicle status #################################################
             # Path Initialize
-
-            if self._path: # path가 있었으면 현재 가장 가까운 계획경로로부터
-                path_frenet = self._frenet_optimal_planning(csp, self._path[0][2]['si_d'],self._path[0][2]['si_dd'],self._path[0][2]['di'],self._path[0][2]['di_d'],self._path[0][2]['di_dd']) ## 여기 바꾸기
-            else: # 없었으면 현재 state로부터 optimal path 찾기
-                path_frenet = self._frenet_optimal_planning(csp, si_d, si_dd, di, di_d, di_dd)
+            if self._path:
+                path_frenet = self._frenet_optimal_planning(self.merging_csp, *self._path[0][2])
+            else: # 첫 생성
+                path_frenet = self._frenet_optimal_planning(self.merging_csp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             self._path = deque(maxlen=10000)
             if not path_frenet:
                 control = carla.VehicleControl()
@@ -315,7 +313,7 @@ class PolynomialAgent(object):
                 control.hand_brake = False
                 return control
             for i in range(len(path_frenet.x)):
-                concised_frenet = {'si_d':path_frenet.s_d[i],'si_dd':path_frenet.s_dd[i],'di':path_frenet.d[i] ,'di_d':path_frenet.d_d[i],'di_dd':path_frenet.d_dd[i]}
+                concised_frenet = [path_frenet.s[i],path_frenet.s_d[i],path_frenet.s_dd[i],path_frenet.d[i],path_frenet.d_d[i],path_frenet.d_dd[i]]
                 self._path.append([carla.Location(x=path_frenet.x[i],y=path_frenet.y[i],z=0.3), path_frenet.ds[i]/self._dt*3.6, concised_frenet])
             # _path[i] = [waypoint, 속도, frenet frame coordinate={'si_d','si_dd','di','di_d','di_dd'}]
     
@@ -381,20 +379,30 @@ class PolynomialAgent(object):
             self.follow_gap = None
         return
     
-    def getforwardwaypoints(self, pathlength, vel_mps):
+    def getforwardwaypoints(self, pathlength, location):
         waypoints = []
-        start_wp = self._map.get_waypoint(self.vehicle.get_location())
-        from_veh = max(0.5,vel_mps*self._dt)
-        start_wp=start_wp.next(from_veh)[0]
+        start_wp = self._map.get_waypoint(location)
         waypoints.append(start_wp)
         for i in range(int(self._unitlength),int(pathlength),int(self._unitlength)):
             waypoints.append(start_wp.next(i)[0])
         return waypoints
+    
+    def get_waypoints_until_end(self, location):
+        start_wp = self._map.get_waypoint(location)
+        return start_wp.next_until_lane_end(self._unitlength)
+    
+    def waypoints_to_csp(self, wps):
+        wpx, wpy = [], []
+        for wp in wps:
+            wpx.append(wp.transform.location.x)
+            wpy.append(wp.transform.location.y)
+        return cubic_spline_planner.CubicSpline2D(wpx, wpy)
 
     def _gap_btw_two(self, leading_veh, following_veh):
-        return  (following_veh.get_location().y-following_veh.bounding_box.location.x-following_veh.bounding_box.extent.x) - (leading_veh.get_location().y-leading_veh.bounding_box.location.x+leading_veh.bounding_box.extent.x)
+        return (following_veh.get_location().y-following_veh.bounding_box.location.x-following_veh.bounding_box.extent.x) - (leading_veh.get_location().y-leading_veh.bounding_box.location.x+leading_veh.bounding_box.extent.x)
 
     def _get_vehicle_status(self, ref_path):
+
         curvature = ref_path.calc_curvature(0)
         tan_angle = ref_path.calc_yaw(0)
         norm_angle =  tan_angle+math.pi/2
@@ -414,9 +422,9 @@ class PolynomialAgent(object):
 
 
 
-    def _frenet_optimal_planning(self, ref_path, si_d, si_dd, di, di_d, di_dd):
+    def _frenet_optimal_planning(self, ref_path, si, si_d, si_dd, di, di_d, di_dd):
         clock1 = time.time()
-        fplist = self._calc_frenet_paths(si_d, si_dd, di, di_d, di_dd)
+        fplist = self._calc_frenet_paths(si, si_d, si_dd, di, di_d, di_dd)
         clock2 = time.time()
         fplist = self._calc_global_paths(fplist, ref_path)
         clock3 = time.time()
@@ -442,7 +450,7 @@ class PolynomialAgent(object):
 
 
 
-    def _calc_frenet_paths(self, si_d, si_dd, di, di_d, di_dd):
+    def _calc_frenet_paths(self, si, si_d, si_dd, di, di_d, di_dd):
         frenet_paths = []
         # generate path to each offset
         LEFT = self._max_road_width
@@ -483,8 +491,7 @@ class PolynomialAgent(object):
                 for tv in np.linspace(max(LOWER_SPEED,0.1),
                                     UPPER_SPEED, self._longitudinal_no):
                     tfp = copy.deepcopy(fp)
-                    lon_qp = QuarticPolynomial(0, si_d, si_dd, tv, 0.0, Ti)
-                    # lon_qp = QuarticPolynomial(0, si_d, 0, tv, 0.0, Ti) 
+                    lon_qp = QuarticPolynomial(si, si_d, si_dd, tv, 0.0, Ti)
 
                     tfp.s = [lon_qp.calc_point(t) for t in fp.t]
                     tfp.s_d = [lon_qp.calc_first_derivative(t) for t in fp.t]
@@ -497,7 +504,7 @@ class PolynomialAgent(object):
                     # square of diff from target speed
                     ds = (self._target_speed - tfp.s_d[-1]) ** 2
 
-                    aligning_cost = sum(np.power(tfp.d,2))
+                    # aligning_cost = sum(np.power(tfp.d,2))
 
                     tfp.cd = self._K_J * Jp + self._K_T * Ti + self._K_D1 * (tfp.d[-1] ** 2)
                     tfp.cv = self._K_J * Js + self._K_T * Ti + self._K_D2 * ds
@@ -561,10 +568,10 @@ class PolynomialAgent(object):
             if not violated :
                 ok_ind.append(i)
                 for num in range(len(fplist[i].x)):
-                    self._debug.draw_point(carla.Location(x=fplist[i].x[num],y=fplist[i].y[num],z=0.3),0.1,carla.Color(0,0,255),0.1)
+                    self._debug.draw_point(carla.Location(x=fplist[i].x[num],y=fplist[i].y[num],z=0.3),0.1,carla.Color(0,0,255),1.0)
             else:
                 for num in range(len(fplist[i].x)):
-                    self._debug.draw_point(carla.Location(x=fplist[i].x[num],y=fplist[i].y[num],z=0.3),0.1,carla.Color(255,0,0),0.1)
+                    self._debug.draw_point(carla.Location(x=fplist[i].x[num],y=fplist[i].y[num],z=0.3),0.1,carla.Color(255,0,0),1.0)
         if not ok_ind:
             print('vel, accel, curvature, Collision',reason)
         return [fplist[i] for i in ok_ind]
@@ -595,14 +602,14 @@ class PolynomialAgent(object):
                     sur_vehicles.append(veh)
         return sur_vehicles
     
-    def _risk_assessment(self, ego_path):
-        if ego_path is None:
+    def _risk_assessment(self):
+        if self._path is None:
             return False
         SVs = self._surrounded_vehicles()
         for sv in SVs:
-            for i in range(len(ego_path)):
+            for i in range(len(self._path)):
                 pred_sur_location = sv.get_location() + i*self._dt*sv.get_velocity() + 0.5*sv.get_acceleration()*(i*self._dt)**2
-                pred_ego_location = ego_path[i][0]
+                pred_ego_location = self._path[i][0]
                 if pred_ego_location.distance(pred_sur_location) < self._safetygap:
                     print('Collision detected!!!!!!!!!!!!!')
                     return True

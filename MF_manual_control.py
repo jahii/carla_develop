@@ -277,7 +277,8 @@ class World(object):
                 print('Please add some Vehicle Spawn Point to your UE4 scene.')
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
-            spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+            # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+            spawn_point = carla.Transform(carla.Location(x=12.87, y=240.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
             print('Spawn point:',spawn_point)
             self.show_vehicle_telemetry = False
