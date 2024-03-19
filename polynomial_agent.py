@@ -149,7 +149,7 @@ class FrenetPath:
 class PolynomialAgent(object):
 
     def __init__(self, vehicle, target_speed=50):
-        self.status = 'STATUS INITIALIZING'
+        self.status = 'EXPERIMENT PREPARING'
         self.lead_gap = None
         self.follow_gap = None
         self.vehicle = vehicle
@@ -158,6 +158,7 @@ class PolynomialAgent(object):
         self._target_speed = target_speed / 3.6 # [km/h to m/s]
         self.LV = None
         self.FV = None
+        self._lights = carla.VehicleLightState.NONE
         
         # Base Parameter
         opt_dict = {}
@@ -184,8 +185,11 @@ class PolynomialAgent(object):
         self._start_emergency = None
         self._ego_wp = None
         self._unitlength = 3.0
-        self._speed_diff_criteria = 30.0
-        self._dist_diff_criteria = 40.0
+        self._speed_diff_criteria = 10
+        self._dist_diff_criteria = 13
+        self.interaction_coefficient = [0.09573335, 0.01039699, 0.001404, -0.02813422, -0.17489757]
+        self.P_interaction = None
+        self.TTC = None
         
 
         # Path Parameter
@@ -250,6 +254,8 @@ class PolynomialAgent(object):
 
 
     def run_step(self, debug = False):
+
+        # 목표한 지점에 다다르면
         if self._arrived :
             control = carla.VehicleControl()
             control.throttle = 0.0
@@ -258,28 +264,40 @@ class PolynomialAgent(object):
             control.hand_brake = False
             return control
         self._isdebug = debug
-        
-        vehicle_location = self.vehicle.get_location()
 
         if self.FV != None:
             speed_diff = get_speed(self.FV)-get_speed(self.vehicle)
-            if 0.95*self._speed_diff_criteria < speed_diff < 1.05*self._speed_diff_criteria and 0.95*self._dist_diff_criteria < self.follow_gap < 1.05*self._dist_diff_criteria:
-                self.status = 'GAP APPROACH'
+            if 0.90*self._speed_diff_criteria < speed_diff < 1.1*self._speed_diff_criteria and 0.90*self._dist_diff_criteria < self.follow_gap < 1.1*self._dist_diff_criteria:
+                self.status = 'NEGOTIATION'
+            if speed_diff<=0:
+                self.P_interaction = 1.0
+                self.TTC = float('inf')
+            else:
+                print([self.follow_gap, speed_diff/3.6]+self.interaction_coefficient)
+                self.P_interaction = np.clip(self._interaction_func(self.follow_gap, speed_diff/3.6), 0,1)
+                self.TTC = self.follow_gap/(speed_diff/3.6)
+        else:
+            self.P_interaction = None
+            self.TTC = None
 
-        
-        #################################################
-
+        ################################################# Vehicle State
+        vehicle_location = self.vehicle.get_location()
         vehicle_speed = get_speed(self.vehicle) # [Km/h]
         vehicle_speed_mps = vehicle_speed / 3.6
         vehicle_acceleration = get_acceleration(self.vehicle)
         vehicle_acceleration_mps = vehicle_acceleration / 3.6
         print('vehicle speed :',round(vehicle_speed_mps,3),'[m/s]', round(vehicle_speed_mps*3.6,3),'[km/h]')
         print('vehicle acceleration :',vehicle_acceleration_mps,'[m/s^2]')
-
         self._ego_wp = self._map.get_waypoint(vehicle_location)
         if not self._ego_wp:
             print('No ego waypoint')
 
+        # Light State
+        if self.status == 'NEGOTIATION' or self.status == 'LANE CHANGING':
+            self._lights = carla.VehicleLightState.LeftBlinker
+        else:
+            self._lights = carla.VehicleLightState.NONE
+        self.vehicle.set_light_state(self._lights)
         # 근처에 있는 wp 지우기
         num_remove_wp = 0
         for i in range(len(self._path)):
@@ -294,8 +312,6 @@ class PolynomialAgent(object):
         print('Number of Removed point:',num_remove_wp)
 
         # path generation ##############################################################
-
-
         if self._risk_assessment() or not self._path or time.time() - self.path_generation_time > 1.5:
             self.path_generation_time = time.time()
             # USING current vehicle status #################################################
@@ -329,23 +345,26 @@ class PolynomialAgent(object):
         control = self._vehicle_controller.run_step(next_speed, next_wp)
 
         print('Throttle',control.throttle)
+        """
+        # Draw Box
         if control.brake > 0.0 :
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self.vehicle.bounding_box.location.z),self.vehicle.bounding_box.extent),self.vehicle.get_transform().rotation,color = carla.Color(255,0,0,0),life_time=0.1)
             print('Brake', control.brake)
         else:
             self._debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle_location.x,y=vehicle_location.y,z=self.vehicle.bounding_box.location.z),self.vehicle.bounding_box.extent),self.vehicle.get_transform().rotation,color = carla.Color(0,255,0,1),life_time=0.1)
-
+        """
+        if control.brake > 0.0:
+            print('Brake', control.brake)
         print('',end='\n\n')
+
+
         if vehicle_location.distance(self._destination) < 1.0:
             print("ARRIVE!")
             self._arrived = True
             control.throttle = 0.0
             control.steer = 0.0
             control.brake = self._max_brake
-            control.hand_brake = False
-
-            return control
-
+            control.hand_brake = True
         return control
 
     def get_lead_follow_vehicles(self, r = 100.0):
@@ -354,7 +373,7 @@ class PolynomialAgent(object):
         self.LV, self.FV = None, None
         lead_gap_cand = float('inf')
         follow_gap_cand = float('inf')
-        
+
         for sv in SVs:
             lateral_diff = self.vehicle.get_location().x-sv.get_location().x
             longitudinal_diff = self.vehicle.get_location().y-sv.get_location().y
@@ -397,6 +416,10 @@ class PolynomialAgent(object):
             wpx.append(wp.transform.location.x)
             wpy.append(wp.transform.location.y)
         return cubic_spline_planner.CubicSpline2D(wpx, wpy)
+    
+    def _interaction_func(self, x, y):
+        a1, a2, a3, a4, b = self.interaction_coefficient
+        return a1*x/y+a2*x**2/y**2+a3*x+a4*y+b
 
     def _gap_btw_two(self, leading_veh, following_veh):
         return (following_veh.get_location().y-following_veh.bounding_box.location.x-following_veh.bounding_box.extent.x) - (leading_veh.get_location().y-leading_veh.bounding_box.location.x+leading_veh.bounding_box.extent.x)
@@ -410,8 +433,8 @@ class PolynomialAgent(object):
         x_dd, y_dd = self.vehicle.get_acceleration().x, self.vehicle.get_acceleration().y
         ref_x, ref_y = ref_path.calc_position(0)
 
-        s_d = x_d*math.cos(tan_angle) + y_d*math.sin(tan_angle)
-        s_dd = x_dd*math.cos(tan_angle) + y_dd*math.sin(tan_angle)
+        s_d = x_d*math.cos(tan_angle) + y_d * math.sin(tan_angle)
+        s_dd = x_dd*math.cos(tan_angle) + y_dd * math.sin(tan_angle)
 
         d = -(self.vehicle.get_location().x-ref_x)*math.cos(norm_angle)-(self.vehicle.get_location().y-ref_y)*math.sin(norm_angle)
         
@@ -453,19 +476,17 @@ class PolynomialAgent(object):
     def _calc_frenet_paths(self, si, si_d, si_dd, di, di_d, di_dd):
         frenet_paths = []
         # generate path to each offset
-        LEFT = self._max_road_width
-        RIGHT = -self._max_road_width
-        print('Lane_change:',self._ego_wp.lane_change)
-        if str(self._ego_wp.lane_change)=='Both':
-            pass
-        elif str(self._ego_wp.lane_change)=='Left':
-            RIGHT = -0.1
-        elif str(self._ego_wp.lane_change)=='Right':
-            LEFT = 0.1
-        else:
-            LEFT = 0.1
-            RIGHT = -0.1
-        
+        if self.status == 'EXPERIMENT PREPARING':
+            self._lateral_no = 1
+            RIGHT = 0
+            LEFT = 0
+            self._K_D1 = 1.0
+        elif self.status == 'NEGOTIATION':
+            self._lateral_no = 3
+            RIGHT = 0
+            LEFT = self._max_road_width/3
+            self._K_D1 = -5.0
+
         # Lateral segment
         for df in np.linspace(RIGHT, LEFT, self._lateral_no):
             # Time segment
@@ -544,8 +565,6 @@ class PolynomialAgent(object):
             for i in range(len(fp.yaw) - 1):
                 fp.c.append((fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i])
         return fplist
-
-
 
     def _check_paths(self, fplist):
         ok_ind = []

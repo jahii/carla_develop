@@ -245,6 +245,7 @@ class World(object):
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
         blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        # blueprint = self.world.get_blueprint_library().filter('vehicle.mercedes.coupe')[0]
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('terramechanics'):
             blueprint.set_attribute('terramechanics', 'true')
@@ -278,7 +279,7 @@ class World(object):
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
             # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
-            spawn_point = carla.Transform(carla.Location(x=12.87, y=240.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+            spawn_point = carla.Transform(carla.Location(x=12.87, y=200.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
             print('Spawn point:',spawn_point)
             self.show_vehicle_telemetry = False
@@ -438,7 +439,7 @@ class KeyboardControl(object):
                         world.constant_velocity_enabled = False
                         world.hud.notification("Disabled Constant Velocity Mode")
                     else:
-                        world.player.enable_constant_velocity(carla.Vector3D(17, 0, 0))
+                        world.player.enable_constant_velocity(carla.Vector3D(60/3.6, 0, 0))
                         world.constant_velocity_enabled = True
                         world.hud.notification("Enabled Constant Velocity Mode at 60 km/h")
                 elif event.key == K_o:
@@ -1096,7 +1097,8 @@ class CameraManager(object):
         if not self._parent.type_id.startswith("walker.pedestrian"):
             self._camera_transforms = [
                 (carla.Transform(carla.Location(x=-2.0*bound_x, y=+0.0*bound_y, z=2.0*bound_z), carla.Rotation(pitch=8.0)), Attachment.SpringArmGhost),
-                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
+                # (carla.Transform(carla.Location(x=+0.6*bound_x, y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
+                (carla.Transform(carla.Location(x=-0.05*bound_x, y=-0.2*bound_y, z=1.0*bound_z), carla.Rotation(pitch=-3.0)), Attachment.Rigid),
                 (carla.Transform(carla.Location(x=+1.9*bound_x, y=+1.0*bound_y, z=1.2*bound_z)), Attachment.SpringArmGhost),
                 (carla.Transform(carla.Location(x=-2.8*bound_x, y=+0.0*bound_y, z=4.6*bound_z), carla.Rotation(pitch=6.0)), Attachment.SpringArmGhost),
                 (carla.Transform(carla.Location(x=-1.0, y=-1.0*bound_y, z=0.4*bound_z)), Attachment.Rigid)]
@@ -1135,6 +1137,7 @@ class CameraManager(object):
             if item[0].startswith('sensor.camera'):
                 bp.set_attribute('image_size_x', str(hud.dim[0]))
                 bp.set_attribute('image_size_y', str(hud.dim[1]))
+                bp.set_attribute('fov', '110')
                 if bp.has_attribute('gamma'):
                     bp.set_attribute('gamma', str(gamma_correction))
                 for attr_name, attr_value in item[3].items():
@@ -1237,6 +1240,7 @@ class CameraManager(object):
 
 
 def game_loop(args):
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (1300, 700)
     pygame.init()
     pygame.font.init()
     world = None

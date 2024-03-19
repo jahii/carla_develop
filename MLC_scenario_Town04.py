@@ -193,10 +193,14 @@ class HUD(object):
                 'FV Speed   :        Not Found',
                 'Follow gap :        Not Found'
             ]
+        # if self.ego_agent.P_interaction!=None:
+        self._info_text+=[
+            '',
+            'P(Interaction) :        %2.3f' % self.ego_agent.P_interaction if self.ego_agent.P_interaction != None else 'P(Interaction) :    Not Found'
+        ]
         self._info_text+=[
             '',
             'Current lane id : %4.1f'% self.ego_agent._map.get_waypoint(self.ego_agent.vehicle.get_location()).lane_id,
-            'Current lane type : %5s'% self.ego_agent._map.get_waypoint(self.ego_agent.vehicle.get_location()).lane_type,
             ''
         ]
 
@@ -262,6 +266,7 @@ def main():
     world = client.get_world()
     try:
         # Pygame Setting
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (900, 0)
         pygame.init()
         pygame.font.init()
         WIDTH = 1600
@@ -288,11 +293,25 @@ def main():
 
         # Spawning vehicles
         ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=150.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=240.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        LV_spawn_point = carla.Transform(carla.Location(x=12.42, y=140.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=180.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        LV_spawn_point = carla.Transform(carla.Location(x=12.8, y=140.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        
         ego_veh = world.spawn_actor(dodge_model, ego_spawn_point)
-        FV_veh = world.spawn_actor(benz_model, FV_spawn_point)
+        start_wp = world.get_map().get_waypoint(ego_veh.get_location())
+        end_wp = start_wp.next(250.0)[0]
+        ego_agent = PolynomialAgent(ego_veh, 50)
+        ego_agent.set_destination(end_wp.transform.location)
+
+        # FV_veh = world.spawn_actor(benz_model, FV_spawn_point)
+        # sleep(0.01)
+        # FV_agent = BasicAgent(FV_veh, 60)
+        # FV_agent.set_destination(carla.Location(x=12.9, y=-50.0, z=0.3))
+
         LV_veh = world.spawn_actor(nissan_model, LV_spawn_point)
+        sleep(0.01)
+        LV_agent = BasicAgent(LV_veh, 55)
+        LV_agent.set_destination(carla.Location(x=12.8, y=-150.0, z=0.3))
+        
         print('Ego Spawn point :',ego_spawn_point)
         print('FV Spawn point : ',FV_spawn_point)
         print('LV Spawn point :',LV_spawn_point)
@@ -327,17 +346,6 @@ def main():
                 debug_temp_loc = actor_snapshot.get_transform().location
                 debug.draw_point(carla.Location(x=debug_temp_loc.x,y=debug_temp_loc.y,z=debug_temp_loc.z+2),0.1, carla.Color(255,0,0,0),2)
 
-        
-        ego_agent = PolynomialAgent(ego_veh, 40)
-        FV_agent = BasicAgent(FV_veh, 70)
-        LV_agent = BasicAgent(LV_veh, 40)
-        
-        start_wp = world.get_map().get_waypoint(ego_veh.get_location())
-        end_wp = start_wp.next(250.0)[0]
-        ego_agent.set_destination(end_wp.transform.location)
-        FV_agent.set_destination(carla.Location(x=12.9, y=20.0, z=0.3))
-        LV_agent.set_destination(carla.Location(x=12.9, y=-50.0, z=0.3))
-        
         start = time.time()
         hud = HUD(WIDTH,HEIGHT,ego_agent)
         world.on_tick(hud.on_world_tick)
@@ -351,9 +359,9 @@ def main():
             clock.tick()
             hud.tick(clock, control_ego)
             
-            if ego_agent.status == 'GAP APPROACH':
+            if ego_agent.status == 'NEGOTIATION':
                 color = (255, 255, 0)
-            elif ego_agent.status == 'NEGOTIATION':
+            elif ego_agent.status == 'LANE CHANGING':
                 color = (255, 153, 0)
             hud.notification(ego_agent.status, color = color)
             hud.render(display)
@@ -365,9 +373,9 @@ def main():
                 start = end
 
                 # FV control
-                control_FV = FV_agent.run_step(debug=False)
-                control_FV.manual_gear_shift = False
-                FV_veh.apply_control(control_FV)
+                # control_FV = FV_agent.run_step(debug=False)
+                # control_FV.manual_gear_shift = False
+                # FV_veh.apply_control(control_FV)
 
                 # LV control
                 control_LV = LV_agent.run_step(debug=False)
