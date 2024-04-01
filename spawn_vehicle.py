@@ -10,6 +10,7 @@ import time
 import math
 # from polynomial_agent import PolynomialAgent
 import weakref
+from pprint import pprint
 
 try:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/carla')
@@ -40,13 +41,14 @@ try:
     # spectator.set_transform(carla.Transform())
     # This will set the spectator at the origin of the map, with 0 degrees
     # pitch, yaw and roll - a good way to orient yourself in the map
-
-    car_model = random.choice(blueprint_library.filter('vehicle.carlamotors.firetruck'))#'vehicle.nissan.patrol'
-
+    all_car_model = blueprint_library.filter('vehicle.*')
+    car_model = random.choice(blueprint_library.filter('vehicle.audi.tt'))
+    # print('colors:',car_model.get_attribute('color').recommended_values)
+    car_model.set_attribute('color', random.choice(car_model.get_attribute('color').recommended_values))
     print(car_model)
 
     spawn_point = random.choice(world.get_map().get_spawn_points())
-
+    spawn_point = carla.Transform(carla.Location(x=16.17, y=-163.0, z=0.300000), carla.Rotation(yaw=-90.29)) 
     # Town12
     # spawn_point = carla.Transform(carla.Location(x=4070, y=4140, z=370)) 
 
@@ -59,17 +61,21 @@ try:
     f_vec =spawn_point.get_forward_vector()
     r_vec =spawn_point.get_right_vector()
     print(f_vec)
-    print('Spawn point :',spawn_point)
+    # print('Spawn point :',spawn_point)
     bound_x = vehicle.bounding_box.location.x*math.cos(math.pi/180*vehicle_transform.rotation.yaw) - vehicle.bounding_box.location.y*math.sin(math.pi/180*vehicle_transform.rotation.yaw)
     bound_y = vehicle.bounding_box.location.x*math.sin(math.pi/180*vehicle_transform.rotation.yaw) + vehicle.bounding_box.location.y*math.cos(math.pi/180*vehicle_transform.rotation.yaw)
     bound_z = vehicle.bounding_box.location.z
     crossed_vec = vehicle.bounding_box.location.cross(f_vec)
-    print('Vehicle location:',vehicle.get_location())
+    # print('Vehicle location:',vehicle.get_location())
     print("Bound location",vehicle.bounding_box.location.x,vehicle.bounding_box.location.y,bound_z)
     print("Bound extent :",vehicle.bounding_box.extent)
     # print(math.sqrt(r_vec.x**2+r_vec.y**2+r_vec.z**2))
-    spectator.set_transform(Camera_pos)
+    spectator.set_transform(carla.Transform(carla.Location(x=13.1, y=-160, z=0.3),spawn_point.rotation))
     debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle.get_location().x+bound_x,y=vehicle.get_location().y+bound_y,z=vehicle.get_location().z+bound_z),vehicle.bounding_box.extent),spawn_point.rotation,life_time=10.0)
+    debug.draw_line(carla.Location(x=13.3, y=-30, z=0.3),carla.Location(x=13.3, y=-169, z=0.3),life_time = 20)
+    debug.draw_line(carla.Location(x=9.9, y=-30, z=0.3),carla.Location(x=9.9, y=-169, z=0.3),life_time = 20)
+    debug.draw_line(carla.Location(x=16.8, y=-30, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 20)
+    debug.draw_line(carla.Location(x=13.3, y=-175, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 20)
     while True:
         sleep(2)
 finally:

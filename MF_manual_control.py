@@ -244,8 +244,8 @@ class World(object):
         cam_index = self.camera_manager.index if self.camera_manager is not None else 0
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
-        blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
-        # blueprint = self.world.get_blueprint_library().filter('vehicle.mercedes.coupe')[0]
+        # blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        blueprint = self.world.get_blueprint_library().filter('vehicle.audi.tt')[0]
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('terramechanics'):
             blueprint.set_attribute('terramechanics', 'true')
@@ -665,6 +665,7 @@ class KeyboardControl(object):
 
 class HUD(object):
     def __init__(self, width, height):
+        self.previous_gear = 0
         self.dim = (width, height)
         font = pygame.font.Font(pygame.font.get_default_font(), 20)
         font_name = 'courier' if os.name == 'nt' else 'mono'
@@ -698,6 +699,9 @@ class HUD(object):
         t = world.player.get_transform()
         v = world.player.get_velocity()
         c = world.player.get_control()
+        if self.previous_gear != c.gear:
+            print('Gear',self.previous_gear,'to',c.gear,':',round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2),1),'km/h')
+            self.previous_gear = c.gear
         compass = world.imu_sensor.compass
         heading = 'N' if compass > 270.5 or compass < 89.5 else ''
         heading += 'S' if 90.5 < compass < 269.5 else ''
@@ -1305,6 +1309,8 @@ def game_loop(args):
             world.destroy()
 
         pygame.quit()
+
+
 
 
 # ==============================================================================

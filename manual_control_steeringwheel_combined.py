@@ -47,7 +47,6 @@ except IndexError:
 import carla
 
 from carla import ColorConverter as cc
-
 import argparse
 import collections
 import datetime
@@ -58,6 +57,8 @@ import re
 import weakref
 from copy import deepcopy
 import time
+from numba import jit
+import csv
 
 
 if sys.version_info >= (3, 0):
@@ -97,6 +98,7 @@ try:
     from pygame.locals import K_r
     from pygame.locals import K_s
     from pygame.locals import K_w
+    from pygame.locals import K_RETURN
 except ImportError:
     raise RuntimeError('cannot import pygame, make sure pygame package is installed')
 
@@ -104,6 +106,10 @@ try:
     import numpy as np
 except ImportError:
     raise RuntimeError('cannot import numpy, make sure numpy package is installed')
+
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 
 # ==============================================================================
@@ -129,8 +135,10 @@ def get_actor_display_name(actor, truncate=250):
 
 
 class World(object):
-    def __init__(self, carla_world, hud, actor_filter, ID):
+    def __init__(self, carla_world, hud, actor_filter, ID, spawn_location):
         self.ID = ID
+        self.start_point = spawn_location
+        
         self.world = carla_world
         self.hud = hud
         self.player = None
@@ -144,6 +152,7 @@ class World(object):
         self._actor_filter = actor_filter
         self.restart()
         self.world.on_tick(hud.on_world_tick)
+        
 
     def restart(self):
         # Keep same camera config if the camera manager exists.
@@ -151,7 +160,7 @@ class World(object):
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
         # blueprint = random.choice(self.world.get_blueprint_library().filter(self._actor_filter))
-        blueprint = self.world.get_blueprint_library().filter('vehicle.dodge.charger_2020')[0]
+        blueprint = self.world.get_blueprint_library().filter('vehicle.audi.tt')[0]
         blueprint.set_attribute('role_name', 'hero')
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -165,14 +174,11 @@ class World(object):
             self.destroy()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
         while self.player is None:
-            spawn_points = self.world.get_map().get_spawn_points()
-            spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
             if self.ID == 0:
-                spawn_point = carla.Transform(carla.Location(x=12.8, y=150.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+                print('FV Spawn point:',self.start_point)
             else:
-                spawn_point = carla.Transform(carla.Location(x=16.17, y=140.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-            print('Spawn point:',spawn_point)
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+                print('MV Spawn point:',self.start_point)
+            self.player = self.world.try_spawn_actor(blueprint, self.start_point)
         # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.player, self.hud)
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
@@ -193,8 +199,8 @@ class World(object):
         self.hud.notification('Weather: %s' % preset[1])
         self.player.get_world().set_weather(preset[0])
 
-    def tick(self, clock):
-        self.hud.tick(self, clock)
+    def tick(self, clock, contoller):
+        self.hud.tick(self, clock, contoller)
 
     def render(self, display):
         self.camera_manager.render(display)
@@ -225,8 +231,17 @@ class World(object):
 class DualControl(object):
     def __init__(self, world, start_in_autopilot):
         self.numactor = len(world)
+        self.START=False
+        self.EXPERIMENT_START=False
         self._autopilot_enabled = start_in_autopilot
         self._current_control = 0
+
+        self.steerCmd = None
+        self.BrakePedal_MV = None
+        self.AccelPedal_MV = None
+        self.BrakePedal_FV = None
+        self.AccelPedal_FV = None
+        self.MV_leftlight = False
 
         self._control = [carla.VehicleControl() for _ in range(self.numactor)]
         self._lights = [carla.VehicleLightState.NONE for _ in range(self.numactor)]
@@ -261,7 +276,7 @@ class DualControl(object):
     def parse_events(self, world, clock):
         current_lights = deepcopy(self._lights)
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+            if event.type == pygame.QUIT :
                 return True
             elif event.type == pygame.JOYBUTTONDOWN:
                 i = event.joy
@@ -272,10 +287,11 @@ class DualControl(object):
                 elif event.button == self._camera_idx:
                     world[i].camera_manager.toggle_camera()
                 elif event.button == self._reverse_idx:
-                    print(i, 'reversed occur')
                     self._control[i].gear = 1 if self._control[i].reverse else -1
                 elif event.button == self._leftblink_idx:
                     current_lights[i] ^= carla.VehicleLightState.LeftBlinker
+                    if i == 1:
+                        self.MV_leftlight = not self.MV_leftlight
                 elif event.button == self._rightblink_idx:
                     current_lights[i]  ^= carla.VehicleLightState.RightBlinker
             elif event.type == pygame.KEYUP:
@@ -302,6 +318,8 @@ class DualControl(object):
                     world[i].camera_manager.set_sensor(event.key - 1 - K_0)
                 elif event.key == K_r:
                     world[i].camera_manager.toggle_recording()
+                elif event.key == K_RETURN:
+                    self.START = True
                 if isinstance(self._control[i], carla.VehicleControl):
                     if event.key == K_q:
                         self._control[i].gear = 1 if self._control[i].reverse else -1
@@ -318,39 +336,24 @@ class DualControl(object):
                         self._autopilot_enabled = not self._autopilot_enabled
                         world[i].player.set_autopilot(self._autopilot_enabled)
                         world[i].hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
-
-        if not self._autopilot_enabled:
-            # self._parse_vehicle_keys(pygame.key.get_pressed(), clock.get_time())
+            
+        if self.EXPERIMENT_START:
             self._parse_vehicle_wheel()
-        for i in range(self.numactor):
-            self._control[i].reverse = self._control[i].gear < 0
-            if self._control[i].brake:
-                current_lights[i] |= carla.VehicleLightState.Brake
-            else:
-                current_lights[i] &= ~carla.VehicleLightState.Brake
-            if self._control[i].reverse:
-                current_lights[i] |= carla.VehicleLightState.Reverse
-            else:
-                current_lights[i] &= ~carla.VehicleLightState.Reverse
-            if current_lights[i] != self._lights[i]:
-                self._lights[i] = current_lights[i]
-            world[i].player.set_light_state(carla.VehicleLightState(self._lights[i]))
-            world[i].player.apply_control(self._control[i])
+            for i in range(self.numactor):
+                self._control[i].reverse = self._control[i].gear < 0
+                if self._control[i].brake:
+                    current_lights[i] |= carla.VehicleLightState.Brake
+                else:
+                    current_lights[i] &= ~carla.VehicleLightState.Brake
+                if self._control[i].reverse:
+                    current_lights[i] |= carla.VehicleLightState.Reverse
+                else:
+                    current_lights[i] &= ~carla.VehicleLightState.Reverse
+                if current_lights[i] != self._lights[i]:
+                    self._lights[i] = current_lights[i]
+                world[i].player.set_light_state(carla.VehicleLightState(self._lights[i]))
+                world[i].player.apply_control(self._control[i])
 
-    # def _parse_vehicle_keys(self, keys, milliseconds):
-    #     for i in range(self.numactor):
-    #         self._control[i].throttle = 1.0 if keys[K_UP] or keys[K_w] else 0.0
-    #         steer_increment = 5e-4 * milliseconds
-    #         if keys[K_LEFT] or keys[K_a]:
-    #             self._steer_cache -= steer_increment
-    #         elif keys[K_RIGHT] or keys[K_d]:
-    #             self._steer_cache += steer_increment
-    #         else:
-    #             self._steer_cache = 0.0
-    #         self._steer_cache = min(0.7, max(-0.7, self._steer_cache))
-    #         self._control[i].steer = round(self._steer_cache, 1)
-    #         self._control[i].brake = 1.0 if keys[K_DOWN] or keys[K_s] else 0.0
-    #         self._control[i].hand_brake = keys[K_SPACE]
 
     def _parse_vehicle_wheel(self):
         for i in range(self.numactor):
@@ -365,21 +368,31 @@ class DualControl(object):
             # For the steering, it seems fine as it is
             K1 = 1.0  # 0.55
             steerCmd = K1 * math.tan(1.1 * jsInputs[self._steer_idx])
+            if i == 1:
+                self.steerCmd = steerCmd
 
-            K2 = 1.6  # 1.6
-            throttleCmd = K2 + (2.05 * math.log10(
-                -0.7 * jsInputs[self._throttle_idx] + 1.4) - 1.2) / 0.92
+            K2 = -0.48  # 1.6
+            throttleCmd = K2 - (2.05 * math.log10(
+                0.7 * jsInputs[self._throttle_idx] + 1.4) - 1.2) / 0.92
             if throttleCmd <= 0:
                 throttleCmd = 0
             elif throttleCmd > 0.75:
                 throttleCmd = 0.75
+            if i==0:
+                self.AccelPedal_FV = jsInputs[self._throttle_idx]
+            else:
+                self.AccelPedal_MV = jsInputs[self._throttle_idx]
 
-            brakeCmd = 1.6 + (2.05 * math.log10(
-                -0.7 * jsInputs[self._brake_idx] + 1.4) - 1.2) / 0.92
+            brakeCmd = -0.6 - (2.05 * math.log10(
+                0.7 * jsInputs[self._brake_idx] + 1.4) - 1.2) / 0.92
             if brakeCmd <= 0:
                 brakeCmd = 0
             elif brakeCmd > 1:
                 brakeCmd = 1
+            if i==0:
+                self.BrakePedal_FV = jsInputs[self._brake_idx]
+            else:
+                self.BrakePedal_MV = jsInputs[self._brake_idx]
 
             self._control[i].steer = steerCmd
             self._control[i].brake = brakeCmd
@@ -388,11 +401,6 @@ class DualControl(object):
             #toggle = jsButtons[self._reverse_idx]
 
             self._control[i].hand_brake = bool(jsButtons[self._handbrake_idx])
-
-
-        
-        
-
 
 
     def _parse_walker_keys(self, keys, milliseconds):
@@ -433,13 +441,13 @@ class HUD(object):
         mono = pygame.font.match_font(mono)
         self._font_mono = pygame.font.Font(mono, 12 if os.name == 'nt' else 14)
         self._notifications = FadingText(font, (width, 40), (ID*width, height - 40))
-        font = pygame.font.Font(pygame.font.get_default_font(), 60)
+        font = pygame.font.Font(pygame.font.get_default_font(), 70)
         self._speedindicator = SpeedIndicator(font,(200, 100), (ID*width+900, height - 200))
         self.help = HelpText(pygame.font.Font(mono, 24), width, height)
         self.server_fps = 0
         self.frame = 0
         self.simulation_time = 0
-        self._show_info = True
+        self._show_info = False
         self._info_text = []
         self._server_clock = pygame.time.Clock()
 
@@ -449,9 +457,9 @@ class HUD(object):
         self.frame = timestamp.frame
         self.simulation_time = timestamp.elapsed_seconds
 
-    def tick(self, world, clock):
+    def tick(self, world, clock, controller):
         self._notifications.tick(world, clock)
-        self._speedindicator.tick(world)
+        self._speedindicator.tick(world, controller.EXPERIMENT_START, controller.MV_leftlight)
         if not self._show_info:
             return
         t = world.player.get_transform()
@@ -465,7 +473,7 @@ class HUD(object):
         collision = [colhist[x + self.frame - 200] for x in range(0, 200)]
         max_col = max(1.0, max(collision))
         collision = [x / max_col for x in collision]
-        vehicles = world.world.get_actors().filter('vehicle.*')
+        # vehicles = world.world.get_actors().filter('vehicle.*')
         self._info_text = [
             'Server:  % 16.0f FPS' % self.server_fps,
             'Client:  % 16.0f FPS' % clock.get_fps(),
@@ -497,17 +505,17 @@ class HUD(object):
             '',
             'Collision:',
             collision,
-            '',
-            'Number of vehicles: % 8d' % len(vehicles)]
-        if len(vehicles) > 1:
-            self._info_text += ['Nearby vehicles:']
-            distance = lambda l: math.sqrt((l.x - t.location.x)**2 + (l.y - t.location.y)**2 + (l.z - t.location.z)**2)
-            vehicles = [(distance(x.get_location()), x) for x in vehicles if x.id != world.player.id]
-            for d, vehicle in sorted(vehicles):
-                if d > 200.0:
-                    break
-                vehicle_type = get_actor_display_name(vehicle, truncate=22)
-                self._info_text.append('% 4dm %s' % (d, vehicle_type))
+            '',]
+            # 'Number of vehicles: % 8d' % len(vehicles)]
+        # if len(vehicles) > 1:
+        #     self._info_text += ['Nearby vehicles:']
+        #     distance = lambda l: math.sqrt((l.x - t.location.x)**2 + (l.y - t.location.y)**2 + (l.z - t.location.z)**2)
+        #     vehicles = [(distance(x.get_location()), x) for x in vehicles if x.id != world.player.id]
+        #     for d, vehicle in sorted(vehicles):
+        #         if d > 200.0:
+        #             break
+        #         vehicle_type = get_actor_display_name(vehicle, truncate=22)
+        #         self._info_text.append('% 4dm %s' % (d, vehicle_type))
 
     def toggle_info(self):
         self._show_info = not self._show_info
@@ -580,16 +588,24 @@ class SpeedIndicator(object):
         self.pos = pos
         self.surface = pygame.Surface(self.dim)
 
-    def tick(self, world):
+    def tick(self, world, EXPERIMENT_START, left_blink):
         v = world.player.get_velocity()
         color = (255,255,255)
-        if world.imu_sensor.accelerometer[0]<-6:
+        if not EXPERIMENT_START:
+            color = (255,255,0)
+        elif 3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2) > 120.0 or world.imu_sensor.accelerometer[0]<-5 or world.imu_sensor.accelerometer[0]>3:
             color = (255,0,0)
-        if 3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2)>60:
-            color = (0,255,0)
-        text_texture = self.font.render(str(int(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))), True, color)
+        text_texture = self.font.render(str(round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))), True, color)
         self.surface.fill((0, 0, 0, 0))
-        self.surface.blit(text_texture, (self.dim[0]//3, self.dim[1]//3))
+        self.surface.blit(text_texture, (2*self.dim[0]//5, self.dim[1]//6))
+        if left_blink and world.ID == 1:
+            # Define the size and position of the indicator
+            blink_indicator_size = (20, 20)  # Size of the indicator (width, height)
+            blink_indicator_position = (0, self.dim[1]//2 - blink_indicator_size[1]//2)  # Position it at left center
+            
+            # Draw a green rectangle for the left blink indicator
+            blink_indicator_rect = pygame.Rect(blink_indicator_position[0], blink_indicator_position[1], blink_indicator_size[0], blink_indicator_size[1])
+            pygame.draw.rect(self.surface, (0, 255, 0), blink_indicator_rect)
         
     def render(self, display):
         display.blit(self.surface, self.pos)
@@ -804,7 +820,7 @@ class CameraManager(object):
         bound_z = 0.5 + self._parent.bounding_box.extent.z
         Attachment = carla.AttachmentType
         self._camera_transforms = [
-            carla.Transform(carla.Location(x=+0.05*bound_x, y=-0.2*bound_y, z=0.95*bound_z), carla.Rotation(pitch=10.0)),
+            carla.Transform(carla.Location(x=+0.0*bound_x, y=-0.2*bound_y, z=1.00*bound_z), carla.Rotation(pitch=15.0)),
             carla.Transform(carla.Location(x=-5.5, z=2.8), carla.Rotation(pitch=-15)),
             carla.Transform(carla.Location(x=1.6, z=1.7))]
         self.transform_index = 1
@@ -832,7 +848,7 @@ class CameraManager(object):
         self.sidebp = bp_library.find('sensor.camera.rgb')
         self.sidebp.set_attribute('image_size_x', str(self.sidesize[0]))
         self.sidebp.set_attribute('image_size_y', str(self.sidesize[1]))
-        self.sidebp.set_attribute('fov','110')
+        self.sidebp.set_attribute('fov','50')
 
     def toggle_camera(self):
         self.transform_index = (self.transform_index + 1) % len(self._camera_transforms)
@@ -866,9 +882,9 @@ class CameraManager(object):
         if self.sidecamera is not None:
             self.sidecamera.destroy()
             self.sidesurface = None
-        self.sidecamera = self._parent.get_world().spawn_actor(self.sidebp, carla.Transform(carla.Location(x=-1.0, y=-1.0*bound_y, z=0.8*bound_z),carla.Rotation(pitch = -5.0, yaw=180.0)),attach_to=self._parent, attachment_type =  Attachment.Rigid)
+        self.sidecamera = self._parent.get_world().spawn_actor(self.sidebp, carla.Transform(carla.Location(x=0.4, y=-1*bound_y, z=0.8*bound_z),carla.Rotation(pitch = 0.0, yaw=180.0)),attach_to=self._parent, attachment_type =  Attachment.Rigid)
         weak_self = weakref.ref(self)
-        self.sidecamera.listen(lambda image: CameraManager._parse_image_side(weak_self, image)) ## LISTEN
+        self.sidecamera.listen(lambda image: CameraManager._parse_image_side(weak_self, image)) 
     def next_sensor(self):
         self.set_sensor(self.index + 1)
 
@@ -912,7 +928,7 @@ class CameraManager(object):
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
-    
+
     @staticmethod
     def _parse_image_side(weak_self, image):
         self = weak_self()
@@ -935,15 +951,71 @@ class CameraManager(object):
 
 
 def game_loop(args):
-    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (-args.width//2, 0)
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (0, 0) #-args.width//2
     pygame.init()
     pygame.font.init()
+    MV_SPEED = random.choice([40.0, 50.0, 60.0])
+    V_DIFF = random.choice([10.0, 20.0, 30.0])
+    DISTANCE = random.choice([10.0, 20.0, 30.0])
+    CRITERIA_DISTANCE = DISTANCE + V_DIFF/3.6*1 ##
+    FV_SPEED = MV_SPEED + V_DIFF
+    LV_SPEED = MV_SPEED+5
+    MV_y = -60.0+MV_SPEED/3.6*6
+    VEHICLE_LENGTH = 2.090605*2
+    INITIAL_DISTANCE = CRITERIA_DISTANCE + V_DIFF/3.6*5 + VEHICLE_LENGTH
+    
+    if 40 <= FV_SPEED < 55:
+        FV_GEAR = 3
+    elif 55 <= FV_SPEED < 78:
+        FV_GEAR = 4
+    elif 78 <= FV_SPEED < 100:
+        FV_GEAR = 5
+    elif 100<= FV_SPEED:
+        FV_GEAR = 6
+    
+    if 25 <= MV_SPEED < 40:
+        MV_GEAR = 2
+    elif 40 <= MV_SPEED < 55:
+        MV_GEAR = 3
+    elif 55 <= MV_SPEED < 78:
+        MV_GEAR = 4
+    elif 78 <= MV_SPEED < 100:
+        MV_GEAR = 5
+    print('Distance:', DISTANCE,', V_difference:',V_DIFF,', Merging V speed:', MV_SPEED)
+    
+    data = []
+
     world0 = None
     world1 = None
+    interation_probability = None
+    FV_location = carla.Transform(carla.Location(x=12.8, y=MV_y+INITIAL_DISTANCE, z=0.300000), carla.Rotation(yaw=-90.29))
+    MV_location = carla.Transform(carla.Location(x=16.17, y=MV_y, z=0.300000), carla.Rotation(yaw=-90.29))
+    LV_location = carla.Transform(carla.Location(x=12.8, y=MV_y-VEHICLE_LENGTH-5, z=0.300000), carla.Rotation(yaw=-90.29))
+    # print('Original FV Spawn point:', FV_location)
+    # print('Original MV Spawn point:', MV_location)
+    # print('Original LV Spawn point:', LV_location)
 
+    
     try:
         client = carla.Client(args.host, args.port)
         client.set_timeout(2.0)
+
+        # Obtain the world object
+        world = client.get_world()
+        settings = world.get_settings()
+        settings.synchronous_mode = True
+        settings.fixed_delta_seconds = 1/20
+        world.apply_settings(settings)
+        world.set_weather(carla.WeatherParameters(sun_azimuth_angle=-90, sun_altitude_angle=90.0,wind_intensity=0.0,fog_density=0.0))
+
+
+        FV_location = world.get_map().get_waypoint(FV_location.location).transform
+        MV_location = world.get_map().get_waypoint(MV_location.location).transform
+        LV_location = world.get_map().get_waypoint(LV_location.location).transform
+        FV_location.location.z += 0.3
+        MV_location.location.z += 0.3
+        LV_location.location.z += 0.3
+
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -951,30 +1023,130 @@ def game_loop(args):
 
         hud0 = HUD(args.width//2, args.height, 0)
         hud1 = HUD(args.width//2, args.height, 1)
-        world0 = World(client.get_world(), hud0, args.filter, 0)
-        world1 = World(client.get_world(), hud1, args.filter, 1)
+        world0 = World(world, hud0, args.filter, 0, FV_location)
+        world1 = World(world, hud1, args.filter, 1, MV_location)
         controller = DualControl([world0,world1], args.autopilot)
-        
-
         clock = pygame.time.Clock()
+        FV_actor = world0.player
+        MV_actor = world1.player
+        FV_actor.apply_control(carla.VehicleControl(manual_gear_shift=True, gear=FV_GEAR))
+        MV_actor.apply_control(carla.VehicleControl(manual_gear_shift=True, gear=MV_GEAR))
+        
+        ############### SPAWN LEADING VEHICLE
+        LV_blueprint = world.get_blueprint_library().filter('vehicle.audi.tt')[0]
+        LV_actor = world.spawn_actor(LV_blueprint, LV_location)
+        print('LV Spawn point:',LV_location)
+
+
         while True:
-            clock.tick_busy_loop(60)
+            
+            clock.tick_busy_loop(20)
             if controller.parse_events([world0, world1], clock):
                 return
-            world0.tick(clock)
-            world1.tick(clock)
+            
+            world0.tick(clock, controller)
+            world1.tick(clock, controller)
+            world.tick()
             world0.render(display)
             world1.render(display)
+            gap_btw_MV = (FV_actor.get_location().y-FV_actor.bounding_box.extent.x) - (MV_actor.get_location().y + MV_actor.bounding_box.extent.x)
+            gap_btw_LV = (FV_actor.get_location().y-FV_actor.bounding_box.extent.x) - (LV_actor.get_location().y + LV_actor.bounding_box.extent.x)
+            if controller.START and not controller.EXPERIMENT_START:
+                FV_actor.enable_constant_velocity(carla.Vector3D(FV_SPEED/3.6, 0, 0))
+                MV_actor.enable_constant_velocity(carla.Vector3D(MV_SPEED/3.6, 0, 0))
+                LV_actor.enable_constant_velocity(carla.Vector3D(LV_SPEED/3.6, 0, 0))
+                FV_actor.apply_control(carla.VehicleControl(gear=FV_GEAR))
+                MV_actor.apply_control(carla.VehicleControl(gear=MV_GEAR))
+                if CRITERIA_DISTANCE >= gap_btw_MV:
+                    FV_actor.disable_constant_velocity()
+                    MV_actor.disable_constant_velocity()
+                    controller.EXPERIMENT_START = True
+
+
+            if controller.EXPERIMENT_START:
+                simulation_time = world.get_snapshot().timestamp.elapsed_seconds
+                speed_FV = 3.6 * math.sqrt(FV_actor.get_velocity().x**2 + FV_actor.get_velocity().y**2 + FV_actor.get_velocity().z**2)  # Convert m/s to km/h
+                speed_MV = 3.6 * math.sqrt(MV_actor.get_velocity().x**2 + MV_actor.get_velocity().y**2 + MV_actor.get_velocity().z**2)  # Convert m/s to km/h
+                
+                
+                interation_probability = interaction_func(gap_btw_MV, (speed_FV-speed_MV)/3.6)
+
+                data.append(
+                    (round(simulation_time,4),
+                    FV_actor.get_location().x, FV_actor.get_location().y,
+                    MV_actor.get_location().x, MV_actor.get_location().y,
+                    LV_actor.get_location().x, LV_actor.get_location().y,
+                    round(speed_FV,3), round(speed_MV,3), 
+                    world0.imu_sensor.accelerometer[0], world1.imu_sensor.accelerometer[0],
+                    FV_actor.get_transform().rotation.yaw, MV_actor.get_transform().rotation.yaw,
+                    gap_btw_MV,
+                    gap_btw_LV,
+                    controller.MV_leftlight,
+                    interation_probability,
+                    controller.steerCmd,
+                    controller.AccelPedal_FV, controller.BrakePedal_FV, controller.AccelPedal_MV, controller.BrakePedal_MV
+                    ))
+            
+            # 두 차량 간의 거리, 차량의 좌표, IMU 센서값, 깜빡이, Front center 좌표, interaction probability
             pygame.display.flip()
-
+            # i = (i+1)%2
     finally:
-
+        settings.synchronous_mode = False
+        settings.fixed_delta_seconds = 0.0
+        world.apply_settings(settings)
+        LV_actor.destroy()
         if world0 is not None:
             world0.destroy()
         if world1 is not None:
-            world1.destroy()            
-
+            world1.destroy()
+        if data:
+            base_path = "./DS_experiment_data/"
+            base_name = str(int(DISTANCE))+'_'+str(int(V_DIFF))+'_'+str(int(MV_SPEED))+'_merging_scenario_data.csv'
+            file_path = create_unique_file(base_path, base_name)
+            with open(file_path,'w',newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Time",
+                                 "x_FV","y_FV", "x_MV","y_MV", "x_LV","y_LV",
+                                 "speed_FV","speed_MV",
+                                 "Acc_x_FV","Acc_x_MV",
+                                 "Yaw_FV","Yaw_MV",
+                                 "gap_btw_MV","gap_btw_LV",
+                                 "LeftBlinker_MV",
+                                 "Interacting possibility",
+                                 "SteerCommand_MV",
+                                 "AccelPedal_FV", "BrakePedal_FV", "AccelPedal_MV", "BrakePedal_MV"
+                                 ])
+                writer.writerows(data)
         pygame.quit()
+        
+# ==============================================================================
+# -- interacting function ------------------------------------------------------
+# ==============================================================================
+
+def interaction_func(x, y):
+    if y < 0:
+        return 1
+    a1, a2, a3, a4, b = [0.09573335, 0.01039699, 0.001404, -0.02813422, -0.17489757]
+    return np.clip(a1*x/y+a2*x**2/y**2+a3*x+a4*y+b,0,1)
+
+# ==============================================================================
+# -- Creating Data -------------------------------------------------------------
+# ==============================================================================
+
+def create_unique_file(base_path, base_name):
+    # 파일 경로 생성
+    file_path = os.path.join(base_path, base_name)
+    
+    # 파일 이름과 확장자 분리
+    name_part, extension = os.path.splitext(base_name)
+    
+    counter = 1
+    # 파일이 존재하면 번호를 증가시켜가며 새 경로 생성
+    while os.path.exists(file_path):
+        file_path = os.path.join(base_path, f"{name_part}_{counter}{extension}")
+        counter += 1
+    
+    return file_path
 
 
 # ==============================================================================
@@ -1008,7 +1180,7 @@ def main():
     argparser.add_argument(
         '--res',
         metavar='WIDTHxHEIGHT',
-        default='3840x1080', # 5120x1440
+        default='3840x1080', # 5120x1440 
         help='window resolution (default: 3840)')
     argparser.add_argument(
         '--filter',
