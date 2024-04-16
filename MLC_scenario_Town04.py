@@ -10,6 +10,7 @@ import pygame
 import time
 import math
 from polynomial_agent import PolynomialAgent
+from IDM_agent import IDMAgent
 import weakref
 
 
@@ -36,6 +37,7 @@ from CubicSpline import cubic_spline_planner
 from carla import ColorConverter as cc
 import carla
 from agents.tools.misc import *
+from pygame.locals import K_ESCAPE
 
 # ==============================================================================
 # -- DisplayManager ------------------------------------------------------------
@@ -53,7 +55,8 @@ class DisplayManager(object):
         Attach_Camera_pos_x = -self.Cameara_back_dist # *math.cos(math.pi/180*self.spawn_point.rotation.yaw)
         Attach_Camera_pos_y = 0 # -self.Cameara_back_dist*math.sin(math.pi/180*self.spawn_point.rotation.yaw)
         Camera_pos_z = 5.0
-        Attach_Camera_pos = carla.Transform(carla.Location(x=Attach_Camera_pos_x, y=Attach_Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-20.0))
+        # Attach_Camera_pos = carla.Transform(carla.Location(x=Attach_Camera_pos_x, y=Attach_Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-20.0))
+        Attach_Camera_pos = carla.Transform(carla.Location(x=0, y=Attach_Camera_pos_y-50, z=Camera_pos_z+60.0),carla.Rotation(yaw = 90.0, pitch=-60.0))
         attachment = carla.AttachmentType.Rigid
         camera_bp = self.bp_lib.find('sensor.camera.rgb')
         camera_bp.set_attribute('image_size_x',str(SIZE[0]))
@@ -266,7 +269,7 @@ def main():
     world = client.get_world()
     try:
         # Pygame Setting
-        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (900, 0)
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (900, 100) #
         pygame.init()
         pygame.font.init()
         WIDTH = 1600
@@ -287,30 +290,51 @@ def main():
         nissan_model = vehicles.filter('vehicle.nissan.patrol')[0]
         dodge_model = vehicles.filter('vehicle.dodge.charger_2020')[0]
         benz_model = vehicles.filter('vehicle.mercedes.coupe')[0]
+        audi_model = vehicles.filter('vehicle.audi.tt')[0]
+        audi_colors = audi_model.get_attribute('color').recommended_values
+        print(audi_colors)
         world.set_weather(carla.WeatherParameters(sun_azimuth_angle=-90.0000, sun_altitude_angle=90.0,wind_intensity=0.0,fog_density=0.0))
-        car_model = random.choice(vehicles)
+        print(world.get_weather())
+        # car_model = random.choice(vehicles)
 
+
+        TARGET_SPEED_DIFF = 30.0
+
+        # After 3 secs, condition should be satisfied
 
         # Spawning vehicles
-        ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=150.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=180.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
-        LV_spawn_point = carla.Transform(carla.Location(x=12.8, y=140.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=80.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        ego_spawn_point = world.get_map().get_waypoint(ego_spawn_point.location).transform
+        ego_spawn_point.location.z+=0.3
+
+        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=120.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        # FV_spawn_point = carla.Transform(carla.Location(x=8.8, y=30.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        FV_spawn_point = world.get_map().get_waypoint(FV_spawn_point.location).transform
+        FV_spawn_point.location.z+=0.3
         
-        ego_veh = world.spawn_actor(dodge_model, ego_spawn_point)
+        LV_spawn_point = carla.Transform(carla.Location(x=12.8, y=70.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        LV_spawn_point = world.get_map().get_waypoint(LV_spawn_point.location).transform
+        LV_spawn_point.location.z+=0.3
+
+        audi_model.set_attribute('color', audi_colors[0])
+        ego_veh = world.spawn_actor(audi_model, ego_spawn_point)
+        sleep(0.01)
         start_wp = world.get_map().get_waypoint(ego_veh.get_location())
         end_wp = start_wp.next(250.0)[0]
-        ego_agent = PolynomialAgent(ego_veh, 50)
+        ego_agent = PolynomialAgent(ego_veh, 60)
         ego_agent.set_destination(end_wp.transform.location)
 
-        # FV_veh = world.spawn_actor(benz_model, FV_spawn_point)
-        # sleep(0.01)
-        # FV_agent = BasicAgent(FV_veh, 60)
-        # FV_agent.set_destination(carla.Location(x=12.9, y=-50.0, z=0.3))
-
-        LV_veh = world.spawn_actor(nissan_model, LV_spawn_point)
+        audi_model.set_attribute('color', '255,255,255')
+        FV_veh = world.spawn_actor(audi_model, FV_spawn_point)
         sleep(0.01)
-        LV_agent = BasicAgent(LV_veh, 55)
-        LV_agent.set_destination(carla.Location(x=12.8, y=-150.0, z=0.3))
+        FV_agent = IDMAgent(FV_veh, 90)
+        FV_agent.set_destination(carla.Location(x=12.9, y=-180.0, z=0.3))
+
+        audi_model.set_attribute('color', '0,100,255')
+        LV_veh = world.spawn_actor(audi_model, LV_spawn_point)
+        sleep(0.01)
+        LV_agent = BasicAgent(LV_veh, 70)
+        LV_agent.set_destination(carla.Location(x=12.8, y=-250.0, z=0.3))
         
         print('Ego Spawn point :',ego_spawn_point)
         print('FV Spawn point : ',FV_spawn_point)
@@ -336,7 +360,7 @@ def main():
         display_manager = DisplayManager(ego_veh,(WIDTH,HEIGHT))
         
 
-        sleep(0.2)
+        sleep(0.1)
 
         # Mark vehicle spawning point 
         world_snapshot = world.get_snapshot()
@@ -350,8 +374,11 @@ def main():
         hud = HUD(WIDTH,HEIGHT,ego_agent)
         world.on_tick(hud.on_world_tick)
         sleep(0.1)
-        control_ego = carla.VehicleControl
+        control_ego = carla.VehicleControl()
         color = (255, 255, 255)
+        lane_count_time = time.time()
+        lane_start = False
+        lane_done = False
         while True:
             ego_agent.get_lead_follow_vehicles()
             
@@ -359,10 +386,12 @@ def main():
             clock.tick()
             hud.tick(clock, control_ego)
             
-            if ego_agent.status == 'NEGOTIATION':
+            if ego_agent.status in ['NEGOTIATING', 'PREPARING']:
                 color = (255, 255, 0)
             elif ego_agent.status == 'LANE CHANGING':
                 color = (255, 153, 0)
+            elif ego_agent.status == 'DONE':
+                color = (0, 255, 0)
             hud.notification(ego_agent.status, color = color)
             hud.render(display)
             
@@ -373,25 +402,25 @@ def main():
                 start = end
 
                 # FV control
-                # control_FV = FV_agent.run_step(debug=False)
-                # control_FV.manual_gear_shift = False
-                # FV_veh.apply_control(control_FV)
+                control_FV = FV_agent.run_step(debug=False)
+                if control_FV.brake > 0:
+                    control_FV.brake *= 0.5
+                FV_veh.apply_control(control_FV)
 
                 # LV control
                 control_LV = LV_agent.run_step(debug=False)
-                control_LV.manual_gear_shift = False
                 LV_veh.apply_control(control_LV)
+                
 
                 # Ego control
                 control_ego = ego_agent.run_step(debug=True)
                 if isinstance(control_ego, carla.VehicleControl):
-                    control_ego.manual_gear_shift = False
                     ego_veh.apply_control(control_ego)
                 elif isinstance(control_ego, carla.VehicleAckermannControl):   
                     ego_veh.apply_ackermann_control(control_ego)
-
+            
             for event in pygame.event.get():
-                if event.type==pygame.QUIT:
+                if event.type==pygame.QUIT or (event.type == pygame.KEYUP and event.key == K_ESCAPE):
                     pygame.quit()
                     sys.exit()
 

@@ -375,9 +375,12 @@ class World(object):
 class KeyboardControl(object):
     """Class that handles keyboard input."""
     def __init__(self, world, start_in_autopilot):
+        self.max_accel = 0
+        self.min_accel = 0
         self._autopilot_enabled = start_in_autopilot
         self._ackermann_enabled = False
         self._ackermann_reverse = 1
+        self.world = world
         if isinstance(world.player, carla.Vehicle):
             self._control = carla.VehicleControl()
             self._ackermann_control = carla.VehicleAckermannControl()
@@ -601,7 +604,7 @@ class KeyboardControl(object):
         if keys[K_UP] or keys[K_w]:
             if not self._ackermann_enabled:
                 self._control.throttle = min(self._control.throttle + 0.01, 1.00)
-            else:
+            else:      
                 self._ackermann_control.speed += round(milliseconds * 0.005, 2) * self._ackermann_reverse
         else:
             if not self._ackermann_enabled:
@@ -616,6 +619,18 @@ class KeyboardControl(object):
         else:
             if not self._ackermann_enabled:
                 self._control.brake = 0
+
+        if self._ackermann_enabled:
+        #     v = self.world.player.get_velocity()
+        #     cur_speed = round(math.sqrt(v.x**2 + v.y**2 + v.z**2),2)
+        #     # /(round(milliseconds * 0.001, 2))
+        #     self._ackermann_control.acceleration = np.clip(self._ackermann_control.speed - cur_speed, -3,3)
+        #     self._ackermann_control.jerk = (self._ackermann_control.acceleration - self.world.imu_sensor.accelerometer[0])/round(milliseconds * 0.001, 2)
+            if self.world.imu_sensor.accelerometer[0]>0 and self.max_accel < self.world.imu_sensor.accelerometer[0]:
+                self.max_accel = self.world.imu_sensor.accelerometer[0]
+            elif self.world.imu_sensor.accelerometer[0]<0 and self.min_accel > self.world.imu_sensor.accelerometer[0]:
+                self.min_accel = self.world.imu_sensor.accelerometer[0]
+            print(self._ackermann_control.acceleration, self.world.imu_sensor.accelerometer[0])
 
         steer_increment = 5e-4 * milliseconds
         if keys[K_LEFT] or keys[K_a]:
@@ -699,8 +714,9 @@ class HUD(object):
         t = world.player.get_transform()
         v = world.player.get_velocity()
         c = world.player.get_control()
+        wp = world.map.get_waypoint(t.location)
         if self.previous_gear != c.gear:
-            print('Gear',self.previous_gear,'to',c.gear,':',round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2),1),'km/h')
+            # print('Gear',self.previous_gear,'to',c.gear,':',round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2),1),'km/h')
             self.previous_gear = c.gear
         compass = world.imu_sensor.compass
         heading = 'N' if compass > 270.5 or compass < 89.5 else ''
@@ -727,6 +743,7 @@ class HUD(object):
             'Location:% 20s' % ('(% 5.1f, % 5.1f)' % (t.location.x, t.location.y)),
             'GNSS:% 24s' % ('(% 2.6f, % 3.6f)' % (world.gnss_sensor.lat, world.gnss_sensor.lon)),
             'Height:  % 18.0f m' % t.location.z,
+            'Lane ID, Road ID, Section ID : % 3.0f, % 3.0f, % 3.0f ' % (wp.lane_id, wp.road_id,wp.section_id),
             '']
 
         if isinstance(c, carla.VehicleControl):
@@ -1244,7 +1261,7 @@ class CameraManager(object):
 
 
 def game_loop(args):
-    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (1300, 700)
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (650, 350)
     pygame.init()
     pygame.font.init()
     world = None
@@ -1298,7 +1315,7 @@ def game_loop(args):
             pygame.display.flip()
 
     finally:
-
+        print(controller.min_accel, controller.max_accel)
         if original_settings:
             sim_world.apply_settings(original_settings)
 
