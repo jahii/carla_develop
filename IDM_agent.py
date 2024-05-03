@@ -112,7 +112,7 @@ class IDMAgent(object):
             control.throttle = 0
             control.brake = self._max_brake
 
-        print(round(vehicle_speed*3.6,3), round(v_IDM*3.6,3), round(a_IDM,3), round(self.imu_sensor.accelerometer[0],3), round(control.brake,3))
+        # print(round(vehicle_speed*3.6,3), round(v_IDM*3.6,3), round(a_IDM,3), round(self.imu_sensor.accelerometer[0],3), round(control.brake,3))
         # print(control)
         return control
 
@@ -143,11 +143,11 @@ class IDMAgent(object):
             cand_wp = self._map.get_waypoint(cand_location)
             if (cur_wp.lane_id == cand_wp.lane_id) : # 같은 차선일 떄
                 pass
-            elif (SV.get_light_state() == carla.VehicleLightState.LeftBlinker) and (0 < cand_location.x-cur_location.x < self._max_road_width): # 오른쪽 차선에 깜빡이 상태로 있을 때
-                necessary_gap = ((cur_speed-cand_speed)**2)/(2*self._desired_decel)
-                # print('speed:',cur_speed,cand_speed,'gap:',round(gap,3), 'need gap:',round(necessary_gap,3), 'Acceleration[m/s^s]:',round(self.imu_sensor.accelerometer[0],3))
-                if (cand_location.x-cur_location.x > self._vehicle_width) and (gap < necessary_gap): # 부딪히진 않으나 Gap이 충분하지 않으면
-                    continue
+            # elif (SV.get_light_state() == carla.VehicleLightState.LeftBlinker) and ((0 < cand_location.x-cur_location.x < 2*self._max_road_width/3) or SV.get_angular_velocity().length()>0.15): # 오른쪽 차선에 깜빡이 상태로 있을 때
+            #     necessary_gap = ((cur_speed-cand_speed)**2)/(2*self._desired_decel)
+            #     # print('speed:',cur_speed,cand_speed,'gap:',round(gap,3), 'need gap:',round(necessary_gap,3), 'Acceleration[m/s^s]:',round(self.imu_sensor.accelerometer[0],3))
+            #     if (cand_location.x-cur_location.x > self._vehicle_width) and (gap < necessary_gap): # 부딪히진 않으나 Gap이 충분하지 않으면
+            #         continue
             else:
                 continue
             if not lead_vehicle or lead_vehicle.get_location().y < cand_location.y:

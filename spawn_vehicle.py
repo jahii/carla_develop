@@ -71,11 +71,13 @@ try:
     print("Bound extent :",vehicle.bounding_box.extent)
     # print(math.sqrt(r_vec.x**2+r_vec.y**2+r_vec.z**2))
     spectator.set_transform(carla.Transform(carla.Location(x=13.1, y=-160, z=0.3),spawn_point.rotation))
-    debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle.get_location().x+bound_x,y=vehicle.get_location().y+bound_y,z=vehicle.get_location().z+bound_z),vehicle.bounding_box.extent),spawn_point.rotation,life_time=10.0)
-    debug.draw_line(carla.Location(x=13.3, y=-30, z=0.3),carla.Location(x=13.3, y=-169, z=0.3),life_time = 20)
-    debug.draw_line(carla.Location(x=9.9, y=-30, z=0.3),carla.Location(x=9.9, y=-169, z=0.3),life_time = 20)
-    debug.draw_line(carla.Location(x=16.8, y=-30, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 20)
-    debug.draw_line(carla.Location(x=13.3, y=-175, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 20)
+    debug.draw_box(carla.BoundingBox(carla.Location(x=vehicle.get_location().x+bound_x,y=vehicle.get_location().y+bound_y,z=vehicle.get_location().z+bound_z),vehicle.bounding_box.extent),spawn_point.rotation,life_time=2.0)
+    debug.draw_line(carla.Location(x=13.3, y=-30, z=0.3),carla.Location(x=13.3, y=-169, z=0.3),life_time = 2)
+    debug.draw_line(carla.Location(x=9.9, y=-30, z=0.3),carla.Location(x=9.9, y=-169, z=0.3),life_time = 2)
+    debug.draw_line(carla.Location(x=16.8, y=-30, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 2)
+    debug.draw_line(carla.Location(x=13.3, y=-175, z=0.3),carla.Location(x=16.8, y=-169, z=0.3),life_time = 2)
+    print(vehicle.type_id, 'vehicle length:',2*vehicle.bounding_box.extent.x)
+    print(vehicle.type_id, 'vehicle width:', 2*vehicle.bounding_box.extent.y)
     while True:
         sleep(2)
 finally:

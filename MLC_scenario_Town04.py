@@ -9,7 +9,8 @@ import argparse
 import pygame
 import time
 import math
-from polynomial_agent import PolynomialAgent
+import json
+from polynomial_agent import PolynomialAgent, PolynomialAgentBaseLine
 from IDM_agent import IDMAgent
 import weakref
 
@@ -94,7 +95,6 @@ class DisplayManager(object):
 # -- FadingText ----------------------------------------------------------------
 # ==============================================================================
 
-
 class FadingText(object):
     def __init__(self, font, dim, pos):
         self.font = font
@@ -159,15 +159,6 @@ class HUD(object):
         self._notifications.tick(clock)
         if not self._show_info:
             return
-        # t = world.player.get_transform()
-        # v = world.player.get_velocity()
-        # c = world.player.get_control()
-
-        # colhist = world.collision_sensor.get_collision_history()
-        # collision = [colhist[x + self.frame - 200] for x in range(0, 200)]
-        # max_col = max(1.0, max(collision))
-        # collision = [x / max_col for x in collision]
-        # vehicles = world.world.get_actors().filter('vehicle.*')
         self._info_text = [
             'Server:  % 16.0f FPS' % self.server_fps,
             'Client:  % 16.0f FPS' % clock.get_fps(),
@@ -196,7 +187,6 @@ class HUD(object):
                 'FV Speed   :        Not Found',
                 'Follow gap :        Not Found'
             ]
-        # if self.ego_agent.P_interaction!=None:
         self._info_text+=[
             '',
             'P(Interaction) :        %2.3f' % self.ego_agent.P_interaction if self.ego_agent.P_interaction != None else 'P(Interaction) :    Not Found'
@@ -268,51 +258,46 @@ def main():
     client = carla.Client('127.0.0.1', 2000)
     world = client.get_world()
     try:
-        # Pygame Setting
-        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (900, 100) #
+        # -------------------------------------------------------- Pygame Setting
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (-1920, 0) #
         pygame.init()
         pygame.font.init()
-        WIDTH = 1600
-        HEIGHT = 900
+        WIDTH = 1920
+        HEIGHT = 1080
         display = pygame.display.set_mode(
             (WIDTH, HEIGHT),
             pygame.HWSURFACE | pygame.DOUBLEBUF)
         clock = pygame.time.Clock()
         
 
-        # Connect to the client and retrieve the world object
+        # -------------------------------------------------------- Connect to the client and retrieve the world object
         spectator = world.get_spectator()
         blueprint_library = world.get_blueprint_library()
         debug = world.debug
 
-        # Initial Setting(vehicles, weather, model...)
+
+        # -------------------------------------------------------- Initial Setting(vehicles, weather, model...)
         vehicles = blueprint_library.filter('vehicle.*')
         nissan_model = vehicles.filter('vehicle.nissan.patrol')[0]
         dodge_model = vehicles.filter('vehicle.dodge.charger_2020')[0]
         benz_model = vehicles.filter('vehicle.mercedes.coupe')[0]
         audi_model = vehicles.filter('vehicle.audi.tt')[0]
         audi_colors = audi_model.get_attribute('color').recommended_values
-        print(audi_colors)
         world.set_weather(carla.WeatherParameters(sun_azimuth_angle=-90.0000, sun_altitude_angle=90.0,wind_intensity=0.0,fog_density=0.0))
-        print(world.get_weather())
         # car_model = random.choice(vehicles)
 
 
-        TARGET_SPEED_DIFF = 30.0
-
-        # After 3 secs, condition should be satisfied
-
-        # Spawning vehicles
-        ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=80.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        # -------------------------------------------------------- Spawning Vehicles
+        ego_spawn_point = carla.Transform(carla.Location(x=16.17, y=50.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         ego_spawn_point = world.get_map().get_waypoint(ego_spawn_point.location).transform
         ego_spawn_point.location.z+=0.3
 
-        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=120.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        FV_spawn_point = carla.Transform(carla.Location(x=12.87, y=80.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         # FV_spawn_point = carla.Transform(carla.Location(x=8.8, y=30.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         FV_spawn_point = world.get_map().get_waypoint(FV_spawn_point.location).transform
         FV_spawn_point.location.z+=0.3
         
-        LV_spawn_point = carla.Transform(carla.Location(x=12.8, y=70.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
+        LV_spawn_point = carla.Transform(carla.Location(x=12.8, y=20.0, z=0.3), carla.Rotation(pitch=0.000000, yaw=-90.29, roll=0.000000))
         LV_spawn_point = world.get_map().get_waypoint(LV_spawn_point.location).transform
         LV_spawn_point.location.z+=0.3
 
@@ -320,34 +305,45 @@ def main():
         ego_veh = world.spawn_actor(audi_model, ego_spawn_point)
         sleep(0.01)
         start_wp = world.get_map().get_waypoint(ego_veh.get_location())
-        end_wp = start_wp.next(250.0)[0]
         ego_agent = PolynomialAgent(ego_veh, 60)
-        ego_agent.set_destination(end_wp.transform.location)
+        # ego_agent = PolynomialAgentBaseLine(ego_veh, 70)
+        ego_agent.set_distance_criteria(15.0)
+        end_location = carla.Location(x=15.460343, y=-168.618637, z=0.006978)
+        ego_agent.set_destination(end_location)
+        debug.draw_point(end_location,0.1,carla.Color(0,0,0),20)
+        
 
         audi_model.set_attribute('color', '255,255,255')
         FV_veh = world.spawn_actor(audi_model, FV_spawn_point)
         sleep(0.01)
         FV_agent = IDMAgent(FV_veh, 90)
-        FV_agent.set_destination(carla.Location(x=12.9, y=-180.0, z=0.3))
+        FV_agent.set_destination(carla.Location(x=12.9, y=-200.0, z=0.3))
 
         audi_model.set_attribute('color', '0,100,255')
         LV_veh = world.spawn_actor(audi_model, LV_spawn_point)
         sleep(0.01)
-        LV_agent = BasicAgent(LV_veh, 70)
-        LV_agent.set_destination(carla.Location(x=12.8, y=-250.0, z=0.3))
+        LV_agent = BasicAgent(LV_veh, 80)
+        LV_agent.set_destination(carla.Location(x=12.8, y=-280.0, z=0.3))
         
-        print('Ego Spawn point :',ego_spawn_point)
-        print('FV Spawn point : ',FV_spawn_point)
-        print('LV Spawn point :',LV_spawn_point)
+        print('Ego Spawn point :', ego_spawn_point)
+        print('FV Spawn point :', FV_spawn_point)
+        print('LV Spawn point :', LV_spawn_point)
 
-        # Camera Setting
+        if isinstance(ego_agent,PolynomialAgent):
+            print('Interaction Polynomial agent')
+        else:
+            print('BaseLine Polynomial agent')
+
+
+        # ------------------------------------------------------  Camera Setting
         # 항공뷰
         Camera_pos_x = FV_spawn_point.location.x - 20*math.cos(math.pi/180*ego_spawn_point.rotation.yaw)
         Camera_pos_y = FV_spawn_point.location.y - 20*math.sin(math.pi/180*ego_spawn_point.rotation.yaw)
         Camera_pos_z = 90
         Camera_pos = carla.Transform(carla.Location(x=Camera_pos_x, y=Camera_pos_y, z=Camera_pos_z),carla.Rotation(pitch=-50,yaw = FV_spawn_point.rotation.yaw))
-        # Behind Ego
+        
         """
+        # Behind Ego
         Camera_pos_z = 5.0
         Camera_pos_x = ego_spawn_point.location.x - 7*math.cos(math.pi/180*ego_spawn_point.rotation.yaw)
         Camera_pos_y = ego_spawn_point.location.y - 7*math.sin(math.pi/180*ego_spawn_point.rotation.yaw)
@@ -355,20 +351,8 @@ def main():
         """
         spectator.set_transform(Camera_pos)
 
-
-        # Display Setting
+        # -------------------------------------------------------  Display Setting
         display_manager = DisplayManager(ego_veh,(WIDTH,HEIGHT))
-        
-
-        sleep(0.1)
-
-        # Mark vehicle spawning point 
-        world_snapshot = world.get_snapshot()
-        for actor_snapshot in world_snapshot:
-            actual_actor = world.get_actor(actor_snapshot.id)
-            if 'vehicle' in actual_actor.type_id :
-                debug_temp_loc = actor_snapshot.get_transform().location
-                debug.draw_point(carla.Location(x=debug_temp_loc.x,y=debug_temp_loc.y,z=debug_temp_loc.z+2),0.1, carla.Color(255,0,0,0),2)
 
         start = time.time()
         hud = HUD(WIDTH,HEIGHT,ego_agent)
@@ -376,11 +360,9 @@ def main():
         sleep(0.1)
         control_ego = carla.VehicleControl()
         color = (255, 255, 255)
-        lane_count_time = time.time()
-        lane_start = False
-        lane_done = False
+
         while True:
-            ego_agent.get_lead_follow_vehicles()
+
             
             display_manager.render(display)
             clock.tick()
@@ -411,7 +393,6 @@ def main():
                 control_LV = LV_agent.run_step(debug=False)
                 LV_veh.apply_control(control_LV)
                 
-
                 # Ego control
                 control_ego = ego_agent.run_step(debug=True)
                 if isinstance(control_ego, carla.VehicleControl):
@@ -426,13 +407,19 @@ def main():
 
             
     finally :
+        print(ego_veh.get_location().y)
         vehicle_list = world.get_actors().filter('*vehicle*')
         for vehicle in vehicle_list:
             print('DESTROY',vehicle)
             vehicle.destroy()
         display_manager.destroy_display()
         pygame.quit()
-        
+        # date = datetime.datetime.today().strftime("%Y_%m_%d_%H_%M_%S")
+        # if ego_agent.DATA_TO_SAVE:
+        #     with open('Path_data/'+str(date)+'.json', 'w') as file:
+        #         json.dump(ego_agent.DATA_TO_SAVE, file, indent=4)
+        # print(str(date)+'.json SAVED!')
+
 
 
 if __name__ == '__main__':

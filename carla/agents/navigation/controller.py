@@ -156,7 +156,6 @@ class PIDLongitudinalController():
         else:
             _de = 0.0
             _ie = 0.0
-
         return np.clip((self._k_p * error) + (self._k_d * _de) + (self._k_i * _ie), -1.0, 1.0)
 
     def change_parameters(self, K_P, K_I, K_D, dt):

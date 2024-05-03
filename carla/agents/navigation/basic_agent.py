@@ -339,7 +339,11 @@ class BasicAgent(object):
             # Two points don't create a polygon, nothing to check
             if len(route_bb) < 3:
                 return None
-
+            ## 편집
+            # print(len(route_bb))
+            # for p in route_bb:
+                
+            #     self._world.debug.draw_point(carla.Location(x=p[0],y=p[1],z=p[2]),0.1,carla.Color(255,255,0),0.05)
             return Polygon(route_bb)
 
         if self._ignore_vehicles:
