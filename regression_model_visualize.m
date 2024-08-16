@@ -56,6 +56,6 @@ for i = 1:size(p,1)
     odd_logit = log(p(i)/(1-p(i)));
     line([(odd_logit-a0)/a1 (odd_logit-a0)/a1],[60 -10], 'Color',[0 0 0 0.5], 'LineStyle', '--','LineWidth',0.3);
 end
-legend(graph,'p = 0.4','p = 0.5','p = 0.6','Fontsize',16);
-xlabel('Distance [m]','fontsize',16);
-ylabel('TTC [s]','fontsize',16);
+legend(graph,'p = 0.4','p = 0.5','p = 0.6','Fontsize',19);
+xlabel('Follow gap [m]','fontsize', 19);
+ylabel('TTC [s]','fontsize', 19);

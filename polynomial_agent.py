@@ -429,7 +429,14 @@ class PolynomialAgent(object):
                 path_frenet = self._frenet_optimal_planning(self.cur_csp, *self._path[0][2])
             else:
                 print('NO PATH')
+                control = carla.VehicleControl()
+                control.throttle = 0.0
+                control.steer = 0.0
+                control.brake = self._max_brake
+                control.hand_brake = False
+                return control
             if not path_frenet:
+                print('NO AVAILABLE PATH')
                 control = carla.VehicleControl()
                 control.throttle = 0.0
                 control.steer = 0.0

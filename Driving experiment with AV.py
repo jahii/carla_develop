@@ -988,11 +988,11 @@ def game_loop(args):
     os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (-1920, 0) #-args.width//2
     pygame.init()
     pygame.font.init()
-    DISTANCE = random.choice([10.0, 20.0, 30.0])
-    V_DIFF = random.choice([10.0, 20.0, 30.0])
+    # DISTANCE = random.choice([10.0, 20.0, 30.0])
+    # V_DIFF = random.choice([10.0, 20.0, 30.0])
     EGO_SPEED = random.choice([40.0, 50.0, 60.0])
-    # DISTANCE = 20.0
-    # V_DIFF = 10.0
+    DISTANCE = 20.0
+    V_DIFF = 20.0
     # EGO_SPEED = 40.0
     CRITERIA_DISTANCE = DISTANCE ##
     FV_SPEED = EGO_SPEED + V_DIFF
@@ -1076,6 +1076,7 @@ def game_loop(args):
         print()
         print(MODEL)
         print()
+        print('MV Spawn point:',EGO_location)
         # ----------------------------------------------------- SPAWN FOLLOWING VEHICLE and SETTING
         world_FV = World(world, hud, args.filter, 0, FV_location)
         
@@ -1131,10 +1132,11 @@ def game_loop(args):
                 EGO_agent.get_lead_follow_vehicles()
                 control_ego = EGO_agent.run_step(debug=True)
                 EGO_actor.apply_control(control_ego)
+                
                 simulation_time = world.get_snapshot().timestamp.elapsed_seconds
                 speed_FV = FV_actor.get_velocity().length() * 3.6 # Convert m/s to km/h
                 speed_EGO = EGO_actor.get_velocity().length() * 3.6 # Convert m/s to km/h
-
+                # print(round(speed_EGO,3))
                 interation_probability = EGO_agent.P_interaction
 
                 data.append(
@@ -1188,11 +1190,19 @@ def game_loop(args):
                                  ])
                 writer.writerows(data)
 
-        # date = datetime.datetime.today().strftime("%Y_%m_%d_%H_%M_%S")
+        date = datetime.datetime.today().strftime("%Y_%m_%d_%H_%M_%S")
         # if EGO_agent.DATA_TO_SAVE:
         #     with open('Path_data/'+str(date)+'.json', 'w') as file:
         #         json.dump(EGO_agent.DATA_TO_SAVE, file, indent=4)
         #     print(str(date)+'.json SAVED!')
+        # if EGO_agent._ACTUAL_PATH:
+        #     with open('Path_data/'+str(date)+'_ACTUAL.json', 'w') as file:
+        #         json.dump(EGO_agent._ACTUAL_PATH, file, indent=4)
+        #     print(str(date)+'.json SAVED!')
+        # if EGO_agent._PLANNED_PATH:
+        #     with open('Path_data/'+str(date)+'_PLANNED.json', 'w') as file:
+        #         json.dump(EGO_agent._PLANNED_PATH, file, indent=4)
+        #     print(str(date)+'.json SAVED!')            
         pygame.quit()
 
 

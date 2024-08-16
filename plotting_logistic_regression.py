@@ -14,8 +14,8 @@ with open('logit_model.pkl','rb') as file:
 coeffi = logistic_model.params.values
 
 # 격자 생성을 위한 distance와 speed_diff의 범위 정의
-distance_range = np.linspace(0, 150, 100)
-speed_diff_range = np.linspace(-10, 150, 100)
+distance_range = np.linspace(0, 100, 100)
+speed_diff_range = np.linspace(-10, 100, 100)
 
 # 격자 생성
 D, S = np.meshgrid(distance_range, speed_diff_range)
@@ -42,9 +42,10 @@ test_set = [(20,10),(20,40),(30,40),(30,20),(30,30),(40,30),(-5,5)]
 # 예측된 p 값을 사용하여 3D 플롯 그리기
 ax.plot_surface(D, S, p_predicted,  cmap='summer', alpha=0.5)
 
-ax.set_xlabel('$X_{1}$: Distance [m]')
-ax.set_ylabel('$X_{2}$: Speed Difference [m/s]')
-ax.set_zlabel('$Y$')
-plt.title('Interaction probability $Y$')
+ax.set_xlabel('$X_{1}$: Distance [m]',fontsize = 15)
+ax.set_ylabel('$X_{2}$: Speed Difference [km/h]',fontsize = 15)
+ax.set_zlabel('$Y$',fontsize = 15)
+ax.set_zlim([0.0, 1.0])
+plt.title('Interaction probability $Y$',fontsize = 15)
 
 plt.show()
